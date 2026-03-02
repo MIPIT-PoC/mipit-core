@@ -1,0 +1,185 @@
+openapi: 3.1.0
+info:
+  title: MiPIT Core API
+  version: 0.1.0
+  description: |
+    Core middleware API for the MiPIT PoC — handles payment ingestion,
+    translation, normalization, and routing.
+    See mipit-docs for the full OpenAPI specification.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+paths:
+  /payments:
+    post:
+      summary: Create a new payment intent
+      operationId: createPayment
+      tags: [Payments]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema:
+            type: string
+            format: uuid
+        - name: X-Trace-ID
+          in: header
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentRequest'
+      responses:
+        '202':
+          description: Payment accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentAccepted'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Idempotency conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /payments/{paymentId}:
+    get:
+      summary: Get payment details
+      operationId: getPayment
+      tags: [Payments]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: paymentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment details
+        '404':
+          description: Payment not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      tags: [Operational]
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  uptime:
+                    type: number
+                  version:
+                    type: string
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      operationId: getMetrics
+      tags: [Operational]
+      responses:
+        '200':
+          description: Prometheus text format metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    CreatePaymentRequest:
+      type: object
+      required: [amount, debtor, creditor]
+      properties:
+        amount:
+          type: number
+          exclusiveMinimum: 0
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+          default: USD
+        debtor:
+          type: object
+          required: [alias]
+          properties:
+            alias:
+              type: string
+            name:
+              type: string
+              maxLength: 140
+        creditor:
+          type: object
+          required: [alias]
+          properties:
+            alias:
+              type: string
+            name:
+              type: string
+              maxLength: 140
+        purpose:
+          type: string
+          maxLength: 35
+          default: P2P
+        reference:
+          type: string
+          maxLength: 140
+          default: MIPIT-POC
+
+    PaymentAccepted:
+      type: object
+      properties:
+        payment_id:
+          type: string
+        status:
+          type: string
+        received_at:
+          type: string
+          format: date-time
+        destination:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        trace_id:
+          type: string

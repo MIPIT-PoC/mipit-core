@@ -1,0 +1,117 @@
+import { ulid } from 'ulid';
+import type { CreatePaymentRequest } from '../api/schemas/payment-request.js';
+import type { CanonicalPacs008 } from '../domain/models/canonical.js';
+import { PAYMENT_STATUS } from '../config/constants.js';
+import type { Translator } from '../translation/translator.js';
+import type { Normalizer } from '../normalization/normalizer.js';
+import type { RouteEngine } from '../routing/route-engine.js';
+import type { Publisher } from '../messaging/publisher.js';
+import type { PaymentRepository } from '../persistence/repositories/payment.repository.js';
+import type { AuditService } from '../audit/audit-service.js';
+import type { Logger } from 'pino';
+
+/**
+ * Orchestrates the full payment flow:
+ * 1. Generate payment_id
+ * 2. Persist with status RECEIVED
+ * 3. Validate payload -> VALIDATED
+ * 4. Translate to canonical (pacs.008) -> CANONICALIZED
+ * 5. Normalize -> (stays CANONICALIZED)
+ * 6. Route -> ROUTED
+ * 7. Publish to RabbitMQ -> QUEUED
+ */
+export class PaymentPipeline {
+  constructor(
+    private readonly translator: Translator,
+    private readonly normalizer: Normalizer,
+    private readonly routeEngine: RouteEngine,
+    private readonly publisher: Publisher,
+    private readonly paymentRepo: PaymentRepository,
+    private readonly auditService: AuditService,
+    private readonly logger: Logger,
+  ) {}
+
+  async execute(
+    request: CreatePaymentRequest,
+    context: { idempotencyKey?: string; traceId?: string },
+  ) {
+    const paymentId = `PMT-${ulid()}`;
+    const traceId = context.traceId ?? ulid();
+    const now = new Date().toISOString();
+
+    const originRail = this.inferRail(request.debtor.alias);
+    const _destinationRail = this.inferRail(request.creditor.alias);
+
+    await this.paymentRepo.create({
+      payment_id: paymentId,
+      idempotency_key: context.idempotencyKey,
+      status: PAYMENT_STATUS.RECEIVED,
+      origin_rail: originRail,
+      amount: request.amount,
+      currency: request.currency,
+      debtor_alias: request.debtor.alias,
+      debtor_name: request.debtor.name,
+      creditor_alias: request.creditor.alias,
+      creditor_name: request.creditor.name,
+      purpose: request.purpose,
+      reference: request.reference,
+      origin_payload: request,
+      trace_id: traceId,
+      created_at: now,
+    });
+
+    await this.auditService.log(paymentId, 'PAYMENT_RECEIVED', 'RECEIVE', traceId);
+
+    const canonical: CanonicalPacs008 = await this.translator.toCanonical(
+      originRail,
+      request,
+      paymentId,
+      traceId,
+    );
+    await this.paymentRepo.updateCanonical(paymentId, canonical, PAYMENT_STATUS.CANONICALIZED);
+    await this.auditService.log(paymentId, 'TRANSLATED', 'TRANSLATE', traceId);
+
+    const normalized = await this.normalizer.normalize(canonical);
+    await this.auditService.log(paymentId, 'NORMALIZED', 'NORMALIZE', traceId);
+
+    const route = await this.routeEngine.resolve(normalized);
+    await this.paymentRepo.updateRoute(
+      paymentId,
+      route.destination,
+      route.ruleName,
+      PAYMENT_STATUS.ROUTED,
+    );
+    await this.auditService.log(paymentId, 'ROUTED', 'ROUTE', traceId, {
+      rule: route.ruleName,
+    });
+
+    const translated = await this.translator.fromCanonical(route.destination, normalized);
+    await this.paymentRepo.updateTranslated(paymentId, translated);
+
+    await this.publisher.publishToAdapter(route.destination, {
+      payment_id: paymentId,
+      trace_id: traceId,
+      canonical: normalized,
+      destination_rail: route.destination,
+      route_rule_applied: route.ruleName,
+      routed_at: new Date().toISOString(),
+    });
+    await this.paymentRepo.updateStatus(paymentId, PAYMENT_STATUS.QUEUED);
+    await this.auditService.log(paymentId, 'QUEUED', 'QUEUE', traceId);
+
+    this.logger.info({ payment_id: paymentId, destination: route.destination }, 'Payment pipeline completed');
+
+    return {
+      payment_id: paymentId,
+      status: PAYMENT_STATUS.RECEIVED,
+      created_at: now,
+      destination_rail: route.destination,
+    };
+  }
+
+  private inferRail(alias: string): string {
+    if (alias.startsWith('PIX-')) return 'PIX';
+    if (alias.startsWith('SPEI-')) return 'SPEI';
+    throw new Error(`Cannot infer rail from alias: ${alias}`);
+  }
+}
