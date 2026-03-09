@@ -108,8 +108,112 @@ El logger de Pino escribe a un stream. Para capturar output en tests, se crea un
 
 ---
 
+---
+
+# Tests Unitarios — `src/persistence/db.ts`
+
+Archivo de test sugerido: `test/unit/persistence/db.test.ts`
+
+## Estrategia general
+
+Mockear el módulo `pg` completo con `jest.mock('pg')`. El mock de `Pool` debe exponer `.query()`, `.on()`, `.end()`, y `.connect()` como jest functions controlables. Mockear también `../observability/logger.js` para verificar llamadas a `logger.info` y `logger.error`.
+
+---
+
+## Test 1: `connectDb` crea pool y ejecuta `SELECT 1`
+
+**Objetivo:** Verificar que `connectDb` crea una instancia de Pool con los parámetros correctos y ejecuta el health check.
+
+**Cómo:**
+- Mockear `Pool` para que `.query('SELECT 1')` resuelva ok.
+- Llamar `connectDb('postgres://...')`.
+- Verificar que el constructor de Pool fue llamado con `{ connectionString, max: 20, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000 }`.
+- Verificar que `.query('SELECT 1')` fue llamado.
+- Verificar que retorna la instancia del pool.
+
+---
+
+## Test 2: `connectDb` loguea error y relanza si la conexión falla
+
+**Objetivo:** Verificar que si `pool.query` falla, se loguea el error, se resetea pool a null, y se propaga la excepción.
+
+**Cómo:**
+- Mockear `Pool.query` para que lance `new Error('connection refused')`.
+- Llamar `connectDb(...)` dentro de un `expect(...).rejects.toThrow()`.
+- Verificar que `logger.error` fue llamado con el objeto de error.
+- Verificar que `getPool()` lanza `'Database pool not initialized'` (pool quedó null).
+
+---
+
+## Test 3: `getPool` retorna el pool cuando está inicializado
+
+**Objetivo:** Verificar que después de `connectDb`, `getPool()` retorna la misma instancia.
+
+**Cómo:**
+- Llamar `connectDb(...)`.
+- Llamar `getPool()`.
+- Verificar que ambos retornan la misma referencia (`toBe`).
+
+---
+
+## Test 4: `getPool` lanza error si no se ha llamado `connectDb`
+
+**Objetivo:** Verificar que sin inicializar, `getPool()` lanza un error descriptivo.
+
+**Cómo:**
+- Sin llamar `connectDb`, invocar `getPool()`.
+- Verificar que lanza `Error('Database pool not initialized')`.
+
+---
+
+## Test 5: `disconnectDb` llama `pool.end()` y resetea a null
+
+**Objetivo:** Verificar que la desconexión limpia el estado del módulo.
+
+**Cómo:**
+- Llamar `connectDb(...)`.
+- Llamar `disconnectDb()`.
+- Verificar que `pool.end()` fue llamado una vez.
+- Verificar que `getPool()` lanza después de la desconexión.
+
+---
+
+## Test 6: `disconnectDb` no falla si no hay pool
+
+**Objetivo:** Verificar que llamar `disconnectDb()` sin pool activo es una operación segura (no-op).
+
+**Cómo:**
+- Sin llamar `connectDb`, invocar `disconnectDb()`.
+- Verificar que no lanza error.
+
+---
+
+## Test 7: Pool params son correctos
+
+**Objetivo:** Verificar que el constructor de Pool recibe exactamente los parámetros esperados.
+
+**Cómo:**
+- Llamar `connectDb('postgres://test')`.
+- Inspeccionar los argumentos del constructor de Pool mockeado.
+- Verificar: `max: 20`, `idleTimeoutMillis: 30000`, `connectionTimeoutMillis: 5000`, `connectionString: 'postgres://test'`.
+
+---
+
+## Test 8: `pool.on('error')` está registrado
+
+**Objetivo:** Verificar que se registra un listener de errores en el pool para idle clients.
+
+**Cómo:**
+- Llamar `connectDb(...)`.
+- Verificar que `pool.on` fue llamado con `'error'` y una función como callback.
+- Simular un error invocando el callback registrado.
+- Verificar que `logger.error` fue llamado con el mensaje de idle client.
+
+---
+
 ## Dependencias para tests
 
+- `pg` (ya instalado, se mockea)
 - `pino` (ya instalado)
 - `jest` + `ts-jest` (ya configurados en devDependencies)
 - `@opentelemetry/api` (ya instalado como transitiva)
