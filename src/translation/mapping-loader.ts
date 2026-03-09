@@ -1,23 +1,12 @@
-import type { Pool } from 'pg';
+import type { MappingEntry } from '../domain/models/mapping-entry.js';
+import type { MappingRepository } from '../persistence/repositories/mapping.repository.js';
 
-export interface FieldMapping {
-  id: string;
-  source_rail: string;
-  source_field: string;
-  canonical_field: string;
-  transform?: string;
-  active: boolean;
-}
+export type { MappingEntry } from '../domain/models/mapping-entry.js';
 
 export class MappingLoader {
-  constructor(private readonly db: Pool) {}
+  constructor(private readonly repo: MappingRepository) {}
 
-  async loadMappings(rail: string): Promise<FieldMapping[]> {
-    // TODO: Load mapping_table entries from DB for the given rail
-    const result = await this.db.query(
-      'SELECT * FROM mapping_table WHERE source_rail = $1 AND active = true ORDER BY source_field',
-      [rail],
-    );
-    return result.rows as FieldMapping[];
+  async loadMappings(rail: string, direction: string): Promise<MappingEntry[]> {
+    return this.repo.findByRail(rail, direction);
   }
 }

@@ -57,7 +57,7 @@ export const SQL = {
 
   // Mapping Table
   FIND_MAPPINGS_BY_RAIL: `
-    SELECT * FROM mapping_table WHERE source_rail = $1 AND active = true ORDER BY source_field`,
+    SELECT * FROM mapping_table WHERE rail = $1 AND direction = $2 AND is_active = true ORDER BY source_field`,
 
-  FIND_ALL_MAPPINGS: `SELECT * FROM mapping_table WHERE active = true ORDER BY source_rail, source_field`,
+  FIND_ALL_MAPPINGS: `SELECT * FROM mapping_table WHERE is_active = true ORDER BY rail, direction, source_field`,
 } as const;
