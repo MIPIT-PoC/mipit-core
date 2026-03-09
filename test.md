@@ -498,6 +498,102 @@ Mockear `Pool` de `pg` con un `db.query` jest function. Mockear `../../observabi
 
 ---
 
+---
+
+# Tests Unitarios — `src/persistence/repositories/mapping.repository.ts`
+
+Archivo de test sugerido: `test/unit/persistence/mapping.repository.test.ts`
+
+## Estrategia general
+
+Mockear `Pool` de `pg` con un `db.query` jest function. Mockear `../../observability/logger.js` para verificar llamadas a `logger.debug`. Instanciar `MappingRepository` con el pool mockeado.
+
+---
+
+## Test 1: `findByRail` retorna entries filtradas por rail y direction
+
+**Objetivo:** Verificar que `findByRail` pasa ambos parámetros al query.
+
+**Cómo:**
+- Mockear `db.query` para retornar 3 filas de tipo `MappingEntry`.
+- Llamar `repo.findByRail('PIX', 'TO_CANONICAL')`.
+- Verificar que `db.query` fue llamado con `[rail, direction]` = `['PIX', 'TO_CANONICAL']`.
+- Verificar que retorna las 3 filas.
+
+---
+
+## Test 2: `findByRail` retorna array vacío si no hay mappings
+
+**Objetivo:** Verificar que sin filas, retorna `[]`.
+
+**Cómo:**
+- Mockear `db.query` con `{ rows: [] }`.
+- Llamar `repo.findByRail('UNKNOWN', 'TO_CANONICAL')`.
+- Verificar que retorna `[]`.
+
+---
+
+## Test 3: `findByRail` usa `rail` e `is_active` (no `source_rail`/`active`)
+
+**Objetivo:** Verificar que la query corregida filtra por las columnas reales.
+
+**Cómo:**
+- Llamar `repo.findByRail('PIX', 'TO_CANONICAL')`.
+- Verificar que `db.query` fue llamado con un SQL que contiene `rail = $1 AND direction = $2 AND is_active = true`.
+
+---
+
+## Test 4: `findAll` retorna todas las entries activas
+
+**Objetivo:** Verificar que `findAll` retorna el resultado completo.
+
+**Cómo:**
+- Mockear `db.query` con 5 filas mixtas (PIX/SPEI, TO_CANONICAL/FROM_CANONICAL).
+- Llamar `repo.findAll()`.
+- Verificar que retorna las 5 filas.
+
+---
+
+## Test 5: `findAll` usa `is_active` en la query
+
+**Objetivo:** Verificar que la query filtra por `is_active = true`.
+
+**Cómo:**
+- Llamar `repo.findAll()`.
+- Verificar que el SQL contiene `is_active = true`.
+
+---
+
+## Test 6: Logging en ambos métodos
+
+**Objetivo:** Verificar que `logger.debug` es llamado con los campos contextuales correctos.
+
+**Cómo:**
+- `findByRail`: verificar log con `{ rail, direction, count }` y mensaje `'Loaded mapping entries'`.
+- `findAll`: verificar log con `{ count }` y mensaje `'Loaded all mapping entries'`.
+
+---
+
+## Test 7: `MappingEntry` interface tiene los campos del schema
+
+**Objetivo:** Verificar type-safety con un objeto que use los campos reales de la tabla.
+
+**Cómo:**
+- Crear `const entry: MappingEntry = { id: 1, rail: 'PIX', direction: 'TO_CANONICAL', source_field: 'valor', target_field: 'amount.value', transformation: 'parse_decimal', is_active: true, created_at: '...' }`.
+- Verificar que compila sin error y que no tiene campos del modelo viejo (`source_rail`, `canonical_field`, `transform`, `active`).
+
+---
+
+## Test 8: `findByRail` diferencia TO_CANONICAL y FROM_CANONICAL
+
+**Objetivo:** Verificar que se pueden hacer llamadas con diferentes directions.
+
+**Cómo:**
+- Llamar `repo.findByRail('PIX', 'TO_CANONICAL')` y `repo.findByRail('PIX', 'FROM_CANONICAL')`.
+- Verificar que `db.query` fue llamado 2 veces con `['PIX', 'TO_CANONICAL']` y `['PIX', 'FROM_CANONICAL']` respectivamente.
+
+---
+
 ## Dependencias para tests
 
 - `pg` (ya instalado, se mockea)
