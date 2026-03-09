@@ -41,11 +41,11 @@ export const SQL = {
     SELECT * FROM audit_events WHERE payment_id = $1 ORDER BY created_at ASC`,
 
   // Idempotency
-  FIND_IDEMPOTENCY_BY_KEY: `SELECT * FROM idempotency_keys WHERE idempotency_key = $1`,
+  FIND_IDEMPOTENCY_BY_KEY: `SELECT * FROM idempotency_keys WHERE idempotency_key = $1 AND expires_at > NOW()`,
 
   INSERT_IDEMPOTENCY: `
-    INSERT INTO idempotency_keys (idempotency_key, request_hash, response_status, response_body, created_at)
-    VALUES ($1,$2,$3,$4,$5)`,
+    INSERT INTO idempotency_keys (idempotency_key, payment_id, request_hash, response_status, response_body, created_at)
+    VALUES ($1,$2,$3,$4,$5,$6)`,
 
   UPDATE_IDEMPOTENCY_RESPONSE: `
     UPDATE idempotency_keys SET response_status = $1, response_body = $2 WHERE idempotency_key = $3`,
