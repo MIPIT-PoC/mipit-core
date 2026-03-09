@@ -403,6 +403,101 @@ Mockear `Pool` de `pg` con un `db.query` jest function. Mockear `../../observabi
 
 ---
 
+---
+
+# Tests Unitarios — `src/persistence/repositories/route-rule.repository.ts`
+
+Archivo de test sugerido: `test/unit/persistence/route-rule.repository.test.ts`
+
+## Estrategia general
+
+Mockear `Pool` de `pg` con un `db.query` jest function. Mockear `../../observability/logger.js` para verificar llamadas a `logger.debug`. Instanciar `RouteRuleRepository` con el pool mockeado.
+
+---
+
+## Test 1: `findActive` retorna reglas ordenadas por prioridad
+
+**Objetivo:** Verificar que `findActive()` retorna las filas del query como `RouteRule[]`.
+
+**Cómo:**
+- Mockear `db.query` para retornar 3 filas con prioridades distintas.
+- Verificar que el SQL usado incluye `ORDER BY priority ASC`.
+- Verificar que retorna las 3 filas.
+
+---
+
+## Test 2: `findActive` retorna array vacío si no hay reglas activas
+
+**Objetivo:** Verificar que sin filas, retorna `[]`.
+
+**Cómo:**
+- Mockear `db.query` con `{ rows: [] }`.
+- Verificar que retorna un array vacío.
+
+---
+
+## Test 3: `findActive` usa `is_active` (no `active`) en la query
+
+**Objetivo:** Verificar que la query corregida filtra por la columna real.
+
+**Cómo:**
+- Llamar `findActive()`.
+- Verificar que `db.query` fue llamado con un SQL que contiene `is_active = true`.
+
+---
+
+## Test 4: `findById` retorna la regla cuando existe
+
+**Objetivo:** Verificar que retorna un `RouteRule` correcto.
+
+**Cómo:**
+- Mockear `db.query` con una fila `{ id: 1, rule_name: 'pix_key_to_pix', condition_field: 'alias.type', ... }`.
+- Llamar `repo.findById(1)`.
+- Verificar que los campos retornados coinciden.
+
+---
+
+## Test 5: `findById` retorna null cuando no existe
+
+**Objetivo:** Verificar que sin fila, retorna `null`.
+
+**Cómo:**
+- Mockear `db.query` con `{ rows: [] }`.
+- Llamar `repo.findById(999)`.
+- Verificar que retorna `null`.
+
+---
+
+## Test 6: `findById` acepta number, no string
+
+**Objetivo:** Verificar que el parámetro se pasa como número.
+
+**Cómo:**
+- Llamar `repo.findById(1)`.
+- Verificar que `db.query` recibe `[1]` (no `['1']`).
+
+---
+
+## Test 7: Logging en ambos métodos
+
+**Objetivo:** Verificar que `logger.debug` es llamado con los campos contextuales correctos.
+
+**Cómo:**
+- Llamar `findActive()`: verificar log con `{ count: N }` y mensaje `'Loaded active route rules'`.
+- Llamar `findById(1)`: verificar log con `{ id: 1, found: true/false }` y mensaje `'Route rule lookup'`.
+
+---
+
+## Test 8: `RouteRule` interface tiene los campos del schema
+
+**Objetivo:** Verificar type-safety con un objeto que use los campos reales de la tabla.
+
+**Cómo:**
+- Crear un objeto `const rule: RouteRule = { id: 1, rule_name: 'test', condition_field: 'alias.type', condition_value: 'PIX_KEY', destination_rail: 'PIX', priority: 1, is_active: true, created_at: '...' }`.
+- Verificar que compila sin error y que no tiene campos del modelo viejo (`name`, `active`, `origin_rail`, etc.).
+
+---
+
 ## Dependencias para tests
 
 - `pg` (ya instalado, se mockea)
