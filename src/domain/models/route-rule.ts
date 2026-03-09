@@ -1,16 +1,11 @@
-import type { Rail } from '../../config/constants.js';
-
 export interface RouteRule {
-  id: string;
-  name: string;
+  id: number;
+  rule_name: string;
+  condition_field: string;
+  condition_value: string;
+  destination_rail: string;
   priority: number;
-  origin_rail?: Rail | string;
-  destination_rail: Rail | string;
-  currency_match?: string;
-  amount_min?: number;
-  amount_max?: number;
-  country_match?: string;
-  active: boolean;
+  is_active: boolean;
+  description?: string;
   created_at: string;
-  updated_at: string;
 }

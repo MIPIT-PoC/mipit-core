@@ -1,13 +1,10 @@
-import type { Pool } from 'pg';
 import type { RouteRule } from '../domain/models/route-rule.js';
+import type { RouteRuleRepository } from '../persistence/repositories/route-rule.repository.js';
 
 export class RuleLoader {
-  constructor(private readonly db: Pool) {}
+  constructor(private readonly repo: RouteRuleRepository) {}
 
   async loadActiveRules(): Promise<RouteRule[]> {
-    const result = await this.db.query(
-      'SELECT * FROM route_rules WHERE active = true ORDER BY priority ASC',
-    );
-    return result.rows as RouteRule[];
+    return this.repo.findActive();
   }
 }

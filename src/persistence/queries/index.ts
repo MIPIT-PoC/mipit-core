@@ -51,7 +51,7 @@ export const SQL = {
     UPDATE idempotency_keys SET response_status = $1, response_body = $2 WHERE idempotency_key = $3`,
 
   // Route Rules
-  FIND_ACTIVE_ROUTE_RULES: `SELECT * FROM route_rules WHERE active = true ORDER BY priority ASC`,
+  FIND_ACTIVE_ROUTE_RULES: `SELECT * FROM route_rules WHERE is_active = true ORDER BY priority ASC`,
 
   FIND_ROUTE_RULE_BY_ID: `SELECT * FROM route_rules WHERE id = $1`,
 
