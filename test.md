@@ -211,10 +211,106 @@ Mockear el módulo `pg` completo con `jest.mock('pg')`. El mock de `Pool` debe e
 
 ---
 
+---
+
+# Tests Unitarios — `src/observability/metrics.ts`
+
+Archivo de test sugerido: `test/unit/observability/metrics.test.ts`
+
+## Estrategia general
+
+Importar directamente las métricas y helpers desde `metrics.ts`. Usar `registry.getMetricsAsJSON()` para inspeccionar el estado del registry después de cada operación. Resetear métricas entre tests con `registry.resetMetrics()`.
+
+---
+
+## Test 1: Las 5 métricas están registradas en el registry
+
+**Objetivo:** Verificar que las 5 métricas custom existen en el registry.
+
+**Cómo:**
+- Obtener `await registry.getMetricsAsJSON()`.
+- Verificar que existen entradas con nombres: `mipit_payments_total`, `mipit_payment_latency_ms`, `mipit_translation_errors_total`, `mipit_routing_decisions_total`, `mipit_idempotency_hits_total`.
+
+---
+
+## Test 2: `paymentCounter` es Counter con labels correctos
+
+**Objetivo:** Verificar tipo y label names del counter de pagos.
+
+**Cómo:**
+- Verificar que `paymentCounter` tiene `labelNames` que incluye `status`, `origin_rail`, `destination_rail`.
+
+---
+
+## Test 3: `paymentLatency` tiene los buckets del ticket
+
+**Objetivo:** Verificar que el histograma usa los buckets especificados.
+
+**Cómo:**
+- Inspeccionar la métrica desde el registry o directamente el output de `registry.metrics()`.
+- Verificar que los boundaries incluyen `5, 10, 25, 50, 100, 250, 500, 1000, 2500`.
+
+---
+
+## Test 4: `recordPayment` incrementa el counter
+
+**Objetivo:** Verificar que el helper incrementa con los labels correctos.
+
+**Cómo:**
+- Llamar `recordPayment('COMPLETED', 'PIX', 'SPEI')`.
+- Obtener el valor del counter con `paymentCounter.get()`.
+- Verificar que hay un valor con `labels: { status: 'COMPLETED', origin_rail: 'PIX', destination_rail: 'SPEI' }` y `value: 1`.
+
+---
+
+## Test 5: `recordLatency` registra observación
+
+**Objetivo:** Verificar que el helper registra la duración en el histograma.
+
+**Cómo:**
+- Llamar `recordLatency('TRANSLATE', 42)`.
+- Obtener el valor del histograma con `paymentLatency.get()`.
+- Verificar que la suma incluye 42 y el count es 1 para el label `stage: 'TRANSLATE'`.
+
+---
+
+## Test 6: `startLatencyTimer` mide duración automática
+
+**Objetivo:** Verificar que el timer captura tiempo transcurrido.
+
+**Cómo:**
+- Llamar `const stop = startLatencyTimer('ROUTE')`.
+- Esperar brevemente (ej: `await new Promise(r => setTimeout(r, 10))`).
+- Llamar `stop()`.
+- Verificar que el histograma tiene una observación > 0 para `stage: 'ROUTE'`.
+
+---
+
+## Test 7: `recordIdempotencyHit` incrementa sin labels
+
+**Objetivo:** Verificar que el counter de idempotencia incrementa correctamente.
+
+**Cómo:**
+- Llamar `recordIdempotencyHit()` dos veces.
+- Verificar que `idempotencyHits.get()` muestra un valor de 2.
+
+---
+
+## Test 8: Default metrics están habilitadas
+
+**Objetivo:** Verificar que `collectDefaultMetrics` registró métricas de proceso.
+
+**Cómo:**
+- Obtener `await registry.getMetricsAsJSON()`.
+- Verificar que existe una métrica con nombre `process_cpu_seconds_total` o `nodejs_eventloop_lag_seconds`.
+
+---
+
 ## Dependencias para tests
 
 - `pg` (ya instalado, se mockea)
 - `pino` (ya instalado)
+- `prom-client` (ya instalado)
 - `jest` + `ts-jest` (ya configurados en devDependencies)
 - `@opentelemetry/api` (ya instalado como transitiva)
 
