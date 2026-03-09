@@ -306,6 +306,103 @@ Importar directamente las métricas y helpers desde `metrics.ts`. Usar `registry
 
 ---
 
+---
+
+# Tests Unitarios — `src/persistence/repositories/idempotency.repository.ts`
+
+Archivo de test sugerido: `test/unit/persistence/idempotency.repository.test.ts`
+
+## Estrategia general
+
+Mockear `Pool` de `pg` con un `db.query` jest function. Mockear `../../observability/logger.js` para verificar llamadas a `logger.debug`. Instanciar `IdempotencyRepository` con el pool mockeado.
+
+---
+
+## Test 1: `findByKey` retorna null si la key no existe
+
+**Objetivo:** Verificar que cuando no hay fila, el método retorna `null`.
+
+**Cómo:**
+- Mockear `db.query` para retornar `{ rows: [] }`.
+- Llamar `repo.findByKey('nonexistent')`.
+- Verificar que retorna `null`.
+
+---
+
+## Test 2: `findByKey` retorna el record cuando existe
+
+**Objetivo:** Verificar que retorna un `IdempotencyRecord` correcto.
+
+**Cómo:**
+- Mockear `db.query` para retornar `{ rows: [{ idempotency_key: 'key1', payment_id: 'PMT-1', request_hash: 'abc', ... }] }`.
+- Llamar `repo.findByKey('key1')`.
+- Verificar que el objeto retornado tiene los campos correctos.
+
+---
+
+## Test 3: `findByKey` usa la query con filtro de expiración
+
+**Objetivo:** Verificar que la query incluye `expires_at > NOW()`.
+
+**Cómo:**
+- Llamar `repo.findByKey('key1')`.
+- Verificar que `db.query` fue llamado con el primer argumento que contiene `expires_at > NOW()`.
+
+---
+
+## Test 4: `insert` pasa los 6 parámetros incluyendo `payment_id`
+
+**Objetivo:** Verificar que el INSERT incluye `payment_id` en la posición correcta.
+
+**Cómo:**
+- Llamar `repo.insert({ idempotency_key: 'k1', payment_id: 'PMT-1', request_hash: 'hash', created_at: '2025-...' })`.
+- Verificar que `db.query` recibe un array de 6 elementos donde el segundo es `'PMT-1'`.
+
+---
+
+## Test 5: `insert` serializa `response_body` como JSON
+
+**Objetivo:** Verificar que un body objeto se pasa como `JSON.stringify`.
+
+**Cómo:**
+- Pasar `response_body: { id: 'test' }` en el record.
+- Verificar que el parámetro 5 del query es `'{"id":"test"}'`.
+
+---
+
+## Test 6: `insert` pasa null si `response_body` es undefined
+
+**Objetivo:** Verificar que sin body, se pasa `null` al query.
+
+**Cómo:**
+- Pasar un record sin `response_body`.
+- Verificar que el parámetro 5 es `null`.
+
+---
+
+## Test 7: `updateResponse` serializa body y pasa status
+
+**Objetivo:** Verificar que los parámetros se pasan en el orden correcto.
+
+**Cómo:**
+- Llamar `repo.updateResponse('key1', 202, { payment_id: 'PMT-1' })`.
+- Verificar que `db.query` recibe `[202, '{"payment_id":"PMT-1"}', 'key1']`.
+
+---
+
+## Test 8: Logging en cada método
+
+**Objetivo:** Verificar que `logger.debug` es llamado con los campos contextuales correctos.
+
+**Cómo:**
+- Llamar cada método (`findByKey`, `insert`, `updateResponse`).
+- Verificar que `logger.debug` fue llamado con:
+  - `findByKey`: `{ idempotency_key, found }` y mensaje `'Idempotency lookup'`.
+  - `insert`: `{ idempotency_key, payment_id }` y mensaje `'Idempotency key inserted'`.
+  - `updateResponse`: `{ idempotency_key, status }` y mensaje `'Idempotency response cached'`.
+
+---
+
 ## Dependencias para tests
 
 - `pg` (ya instalado, se mockea)
