@@ -1,12 +1,12 @@
 import amqplib from 'amqplib';
-import type { Connection, Channel } from 'amqplib';
+import type { ChannelModel, Channel } from 'amqplib';
 import { EXCHANGES, QUEUES, ROUTING_KEYS } from '../config/constants.js';
 import { logger } from '../observability/logger.js';
 
-let connection: Connection | null = null;
+let connection: ChannelModel | null = null;
 let channel: Channel | null = null;
 
-export async function connectRabbitMQ(url: string): Promise<{ connection: Connection; channel: Channel }> {
+export async function connectRabbitMQ(url: string): Promise<{ connection: ChannelModel; channel: Channel }> {
   connection = await amqplib.connect(url);
   channel = await connection.createChannel();
 

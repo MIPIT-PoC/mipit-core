@@ -14,7 +14,7 @@ export interface ServerDeps {
   channel: Channel;
 }
 
-export async function buildServer(_deps: ServerDeps) {
+export async function buildServer(deps: ServerDeps) {
   const app = Fastify({
     logger: false,
     requestIdLogLabel: 'trace_id',
@@ -27,7 +27,7 @@ export async function buildServer(_deps: ServerDeps) {
 
   await app.register(healthRoutes);
   await app.register(metricsRoutes);
-  await app.register(paymentRoutes);
+  await app.register((fastify) => paymentRoutes(fastify, deps));
 
   logger.info('Fastify server built and routes registered');
 

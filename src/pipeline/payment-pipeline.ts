@@ -40,7 +40,6 @@ export class PaymentPipeline {
     const now = new Date().toISOString();
 
     const originRail = this.inferRail(request.debtor.alias);
-    const _destinationRail = this.inferRail(request.creditor.alias);
 
     await this.paymentRepo.create({
       payment_id: paymentId,
