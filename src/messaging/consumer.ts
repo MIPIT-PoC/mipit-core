@@ -44,17 +44,23 @@ export class AckConsumer {
 
       await this.paymentRepo.updateAck(ack.payment_id, ack.rail_ack, finalStatus);
 
+      // Determine the actor (which adapter sent the ACK)
+      const actor = ack.source_rail === 'PIX' ? 'adapter-pix' : 'adapter-spei';
+
       await this.auditService.log(
         ack.payment_id,
-        `RAIL_${ack.rail_ack.status}`,
-        'RAIL_ACK',
-        ack.trace_id,
+        'ACK_RECEIVED',
+        actor,
         {
+          rail_status: ack.rail_ack.status,
+          final_payment_status: finalStatus,
           adapter_id: ack.adapter_id,
           instance_id: ack.instance_id,
           latency_ms: ack.latency_ms,
           rail_tx_id: ack.rail_ack.rail_tx_id,
+          error: ack.rail_ack.error,
         },
+        ack.trace_id,
       );
 
       this.channel.ack(msg);
