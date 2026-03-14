@@ -40,7 +40,6 @@ export class PaymentPipeline {
     const now = new Date().toISOString();
 
     const originRail = this.inferRail(request.debtor.alias);
-    const _destinationRail = this.inferRail(request.creditor.alias);
 
     await this.paymentRepo.create({
       payment_id: paymentId,
@@ -60,7 +59,11 @@ export class PaymentPipeline {
       created_at: now,
     });
 
-    await this.auditService.log(paymentId, 'PAYMENT_RECEIVED', 'RECEIVE', traceId);
+    await this.auditService.log(paymentId, 'PAYMENT_RECEIVED', 'system', {
+      origin_rail: originRail,
+      amount: request.amount,
+      currency: request.currency,
+    }, traceId);
 
     const canonical: CanonicalPacs008 = await this.translator.toCanonical(
       originRail,
@@ -69,10 +72,15 @@ export class PaymentPipeline {
       traceId,
     );
     await this.paymentRepo.updateCanonical(paymentId, canonical, PAYMENT_STATUS.CANONICALIZED);
-    await this.auditService.log(paymentId, 'TRANSLATED', 'TRANSLATE', traceId);
+    await this.auditService.log(paymentId, 'CANONICAL_UPDATED', 'system-translator', {
+      pacs008_version: '008.001.08',
+      fields_normalized: Object.keys(canonical).length,
+    }, traceId);
 
     const normalized = await this.normalizer.normalize(canonical);
-    await this.auditService.log(paymentId, 'NORMALIZED', 'NORMALIZE', traceId);
+    await this.auditService.log(paymentId, 'TRANSLATION_COMPLETE', 'system', {
+      fields_normalized: Object.keys(normalized).length,
+    }, traceId);
 
     const route = await this.routeEngine.resolve(normalized);
     await this.paymentRepo.updateRoute(
@@ -81,9 +89,13 @@ export class PaymentPipeline {
       route.ruleName,
       PAYMENT_STATUS.ROUTED,
     );
-    await this.auditService.log(paymentId, 'ROUTED', 'ROUTE', traceId, {
-      rule: route.ruleName,
-    });
+    await this.auditService.logRoutingDecision(
+      paymentId,
+      route.destination,
+      route.ruleName,
+      'system-router',
+      traceId,
+    );
 
     const translated = await this.translator.fromCanonical(route.destination, normalized);
     await this.paymentRepo.updateTranslated(paymentId, translated);
@@ -97,7 +109,10 @@ export class PaymentPipeline {
       routed_at: new Date().toISOString(),
     });
     await this.paymentRepo.updateStatus(paymentId, PAYMENT_STATUS.QUEUED);
-    await this.auditService.log(paymentId, 'QUEUED', 'QUEUE', traceId);
+    await this.auditService.log(paymentId, 'STATUS_CHANGE', 'system', {
+      from_status: PAYMENT_STATUS.ROUTED,
+      to_status: PAYMENT_STATUS.QUEUED,
+    }, traceId);
 
     this.logger.info({ payment_id: paymentId, destination: route.destination }, 'Payment pipeline completed');
 

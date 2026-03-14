@@ -4,7 +4,7 @@ import { logger } from '../../observability/logger.js';
 import { AppError } from '../../domain/errors/index.js';
 
 export function errorHandler(error: FastifyError | Error, request: FastifyRequest, reply: FastifyReply) {
-  const traceId = (request as Record<string, unknown>).traceId as string | undefined;
+  const traceId = (request as unknown as Record<string, unknown>).traceId as string | undefined;
 
   if (error instanceof ZodError) {
     return reply.status(400).send({

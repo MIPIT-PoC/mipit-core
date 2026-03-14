@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import client from 'prom-client';
 
 export const registry = new client.Registry();
@@ -14,7 +15,7 @@ export const paymentLatency = new client.Histogram({
   name: 'mipit_payment_latency_ms',
   help: 'Payment processing latency in milliseconds by stage',
   labelNames: ['stage'],
-  buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
+  buckets: [5, 10, 25, 50, 100, 250, 500, 1000, 2500],
   registers: [registry],
 });
 
@@ -37,3 +38,30 @@ export const idempotencyHits = new client.Counter({
   help: 'Idempotency cache hits (duplicates blocked)',
   registers: [registry],
 });
+
+export function recordPayment(status: string, originRail: string, destinationRail: string) {
+  paymentCounter.inc({ status, origin_rail: originRail, destination_rail: destinationRail });
+}
+
+export function recordLatency(stage: string, durationMs: number) {
+  paymentLatency.observe({ stage }, durationMs);
+}
+
+export function recordTranslationError(rail: string, errorType: string) {
+  translationErrors.inc({ rail, error_type: errorType });
+}
+
+export function recordRoutingDecision(rule: string, destinationRail: string) {
+  routingDecisions.inc({ rule, destination_rail: destinationRail });
+}
+
+export function recordIdempotencyHit() {
+  idempotencyHits.inc();
+}
+
+export function startLatencyTimer(stage: string): () => void {
+  const start = performance.now();
+  return () => {
+    paymentLatency.observe({ stage }, performance.now() - start);
+  };
+}

@@ -1,6 +1,6 @@
 import type { CanonicalPacs008 } from '../domain/models/canonical.js';
 import type { RouteRule } from '../domain/models/route-rule.js';
-import { RuleLoader } from './rule-loader.js';
+import type { RuleLoader } from './rule-loader.js';
 import { RoutingError } from '../domain/errors/index.js';
 
 export interface RouteResult {
@@ -20,7 +20,7 @@ export class RouteEngine {
       if (this.matches(rule, canonical)) {
         return {
           destination: rule.destination_rail,
-          ruleName: rule.name,
+          ruleName: rule.rule_name,
         };
       }
     }
@@ -32,11 +32,21 @@ export class RouteEngine {
   }
 
   private matches(rule: RouteRule, canonical: CanonicalPacs008): boolean {
-    if (rule.origin_rail && rule.origin_rail !== canonical.origin.rail) return false;
-    if (rule.currency_match && rule.currency_match !== canonical.amount.currency) return false;
-    if (rule.amount_min && canonical.amount.value < rule.amount_min) return false;
-    if (rule.amount_max && canonical.amount.value > rule.amount_max) return false;
-    if (rule.country_match && rule.country_match !== canonical.debtor.country) return false;
-    return true;
+    const { condition_field, condition_value } = rule;
+
+    switch (condition_field) {
+      case 'alias.type': {
+        const credAlias = canonical.creditor?.account_id ?? '';
+        if (credAlias.startsWith('PIX-')) return condition_value === 'PIX_KEY';
+        if (credAlias.startsWith('SPEI-')) return condition_value === 'CLABE';
+        return false;
+      }
+      case 'destination_country':
+        return canonical.creditor?.country === condition_value;
+      case 'availability':
+        return false;
+      default:
+        return false;
+    }
   }
 }

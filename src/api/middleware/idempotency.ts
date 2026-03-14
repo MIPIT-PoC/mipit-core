@@ -24,7 +24,7 @@ export function idempotencyMiddleware(repo: IdempotencyRepository) {
       return reply.status(existing.response_status ?? 202).send(existing.response_body);
     }
 
-    (request as Record<string, unknown>).idempotencyKey = key;
-    (request as Record<string, unknown>).requestHash = requestHash;
+    (request as unknown as Record<string, unknown>).idempotencyKey = key;
+    (request as unknown as Record<string, unknown>).requestHash = requestHash;
   };
 }

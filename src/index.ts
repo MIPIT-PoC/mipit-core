@@ -5,7 +5,6 @@ const sdk = initTelemetry();
 import { buildServer } from './api/server.js';
 import { connectDb } from './persistence/db.js';
 import { connectRabbitMQ } from './messaging/rabbitmq.js';
-import { AckConsumer } from './messaging/consumer.js';
 import { env } from './config/env.js';
 import { logger } from './observability/logger.js';
 
@@ -18,7 +17,7 @@ async function main() {
   // TODO: Wire up repositories and services for AckConsumer
   // const ackConsumer = new AckConsumer(channel, paymentRepo, auditService);
   // await ackConsumer.start();
-  logger.info('ACK consumer ready on queue: payments.ack');
+  logger.info('Server started');
 
   await app.listen({ port: env.PORT, host: '0.0.0.0' });
   logger.info(`mipit-core listening on port ${env.PORT}`);
