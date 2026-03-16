@@ -236,3 +236,32 @@ Mockear `RouteRuleRepository` y `logger`. Usar `jest.spyOn(Date, 'now')` para co
 
 ## Test 5: Logging muestra source correcto
 - Primera llamada: `source: 'db'`. Segunda: `source: 'cache'`.
+
+---
+
+# Tests Unitarios — `src/routing/route-engine.ts`
+
+Archivo de test sugerido: `test/unit/routing/route-engine.test.ts`
+
+## Estrategia general
+
+Mockear `RuleLoader`, `logger`, `metrics` (`startLatencyTimer`, `recordRoutingDecision`).
+
+## Test 1: Resuelve ruta para alias PIX_KEY
+- Rules con `condition_field: 'alias.type'`, `condition_value: 'PIX_KEY'` → `destination: 'PIX'`.
+- Canonical con `creditor.account_id` que empiece con `PIX-`.
+
+## Test 2: Resuelve ruta para alias CLABE (SPEI)
+- Rules con `condition_value: 'CLABE'` → `destination: 'SPEI'`.
+
+## Test 3: Respeta prioridad — rule con menor priority gana
+- Dos rules que ambas matchean; la de menor priority se selecciona.
+
+## Test 4: Lanza RoutingError si ninguna regla matchea
+- Canonical sin alias reconocible → `RoutingError`.
+
+## Test 5: `recordRoutingDecision` se llama con rule_name y destination
+- Verificar que la métrica se registra correctamente.
+
+## Test 6: Timer de latencia se detiene tanto en éxito como en error
+- Verificar que `stopTimer` se llama en ambos paths.

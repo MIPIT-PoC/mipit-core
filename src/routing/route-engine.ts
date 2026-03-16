@@ -2,6 +2,8 @@ import type { CanonicalPacs008 } from '../domain/models/canonical.js';
 import type { RouteRule } from '../domain/models/route-rule.js';
 import type { RuleLoader } from './rule-loader.js';
 import { RoutingError } from '../domain/errors/index.js';
+import { logger } from '../observability/logger.js';
+import { startLatencyTimer, recordRoutingDecision } from '../observability/metrics.js';
 
 export interface RouteResult {
   destination: string;
@@ -12,12 +14,21 @@ export class RouteEngine {
   constructor(private readonly ruleLoader: RuleLoader) {}
 
   async resolve(canonical: CanonicalPacs008): Promise<RouteResult> {
-    const rules = await this.ruleLoader.loadActiveRules();
+    const stopTimer = startLatencyTimer('routing');
+    const log = logger.child({ payment_id: canonical.payment_id, origin_rail: canonical.origin.rail });
 
+    log.info('Starting routing resolution');
+    const rules = await this.ruleLoader.loadActiveRules();
     const sorted = rules.sort((a, b) => a.priority - b.priority);
 
     for (const rule of sorted) {
       if (this.matches(rule, canonical)) {
+        stopTimer();
+        recordRoutingDecision(rule.rule_name, rule.destination_rail);
+        log.info(
+          { rule: rule.rule_name, destination: rule.destination_rail },
+          'Routing rule matched',
+        );
         return {
           destination: rule.destination_rail,
           ruleName: rule.rule_name,
@@ -25,6 +36,8 @@ export class RouteEngine {
       }
     }
 
+    stopTimer();
+    log.error({ rulesEvaluated: sorted.length }, 'No routing rule matched');
     throw new RoutingError('No routing rule matched for payment', {
       payment_id: canonical.payment_id,
       origin_rail: canonical.origin.rail,
