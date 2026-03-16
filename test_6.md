@@ -158,3 +158,37 @@ Mockear `pixToCanonical`, `speiToCanonical`, `canonicalToPix`, `canonicalToSpei`
 ## Test 6: Error en traducción registra métrica y logging
 - Mockear `pixToCanonical` para que lance error.
 - Verificar `recordTranslationError('PIX', 'unexpected')` y `log.error` llamados.
+
+---
+
+# Tests Unitarios — `src/normalization/rules/date-rules.ts` y `currency-rules.ts`
+
+Archivo de test sugerido: cubiertos en `test/unit/normalization/normalizer.test.ts` (CORE-021)
+
+## Tests de date-rules (cubiertos via Normalizer)
+
+### Test 1: Fecha no-UTC se convierte a UTC ISO-8601
+- Input: `created_at: '2025-06-15 14:30:00-05:00'`
+- Expected: `'2025-06-15T19:30:00.000Z'`
+
+### Test 2: Fecha inválida no crashea
+- Input: `created_at: 'not-a-date'`
+- Expected: mantiene valor original, genera log warning.
+
+### Test 3: Fecha ya en UTC no cambia
+- Input: `created_at: '2025-06-15T12:00:00.000Z'`
+- Expected: idéntico.
+
+## Tests de currency-rules (cubiertos via Normalizer)
+
+### Test 4: Currency lowercase se convierte a uppercase
+- Input: `amount.currency: 'usd'` → `'USD'`.
+
+### Test 5: FX se setea para PIX con currency no-BRL
+- `origin.rail: 'PIX'`, `currency: 'USD'` → `fx.source_currency = 'BRL'`, `fx.target_currency = 'USD'`.
+
+### Test 6: FX no se setea si currency ya es la local del rail
+- `origin.rail: 'PIX'`, `currency: 'BRL'` → `fx.target_currency` undefined.
+
+### Test 7: FX se setea para SPEI con currency no-MXN
+- `origin.rail: 'SPEI'`, `currency: 'BRL'` → `fx.source_currency = 'MXN'`, `fx.target_currency = 'BRL'`.
