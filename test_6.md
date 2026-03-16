@@ -211,3 +211,28 @@ Mockear `logger` y `metrics` (`startLatencyTimer`). Usar un `CanonicalPacs008` v
 
 ## Test 3: Logger registra inicio y fin
 - Verificar que `log.info` se llama con 'Starting normalization' y 'Normalization complete'.
+
+---
+
+# Tests Unitarios — `src/routing/rule-loader.ts`
+
+Archivo de test sugerido: `test/unit/routing/rule-loader.test.ts`
+
+## Estrategia general
+
+Mockear `RouteRuleRepository` y `logger`. Usar `jest.spyOn(Date, 'now')` para controlar TTL.
+
+## Test 1: Primera llamada consulta DB
+- `loadActiveRules()` llama `repo.findActive()` y retorna las rules.
+
+## Test 2: Segunda llamada usa cache
+- Llamar dos veces → `repo.findActive()` se llama solo 1 vez.
+
+## Test 3: Cache expira tras 5 min
+- Avanzar `Date.now()` 5 min + 1ms entre llamadas → `repo.findActive()` se llama 2 veces.
+
+## Test 4: `clearCache()` fuerza recarga
+- Llamar, `clearCache()`, llamar de nuevo → `repo.findActive()` se llama 2 veces.
+
+## Test 5: Logging muestra source correcto
+- Primera llamada: `source: 'db'`. Segunda: `source: 'cache'`.
