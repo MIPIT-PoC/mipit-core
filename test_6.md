@@ -192,3 +192,22 @@ Archivo de test sugerido: cubiertos en `test/unit/normalization/normalizer.test.
 
 ### Test 7: FX se setea para SPEI con currency no-MXN
 - `origin.rail: 'SPEI'`, `currency: 'BRL'` → `fx.source_currency = 'MXN'`, `fx.target_currency = 'BRL'`.
+
+---
+
+# Tests Unitarios — `src/normalization/normalizer.ts`
+
+Archivo de test sugerido: `test/unit/normalization/normalizer.test.ts`
+
+## Estrategia general
+
+Mockear `logger` y `metrics` (`startLatencyTimer`). Usar un `CanonicalPacs008` válido como fixture base.
+
+## Test 1: Normalización ejecuta las 4 reglas en orden
+- Verificar que `normalizeDates`, `normalizeCurrency`, `normalizeIds`, `applyFallbacks` se aplican.
+
+## Test 2: Timer de latencia se inicia y detiene
+- Verificar que `startLatencyTimer('normalization')` se llama y el stop callback se ejecuta.
+
+## Test 3: Logger registra inicio y fin
+- Verificar que `log.info` se llama con 'Starting normalization' y 'Normalization complete'.
