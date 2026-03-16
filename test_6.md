@@ -128,3 +128,33 @@ Crear un `CanonicalPacs008` válido y verificar la transformación a SPEI.
 
 ## Test 3: Mapea montos y moneda correctamente
 - Verificar `monto` = `amount.value`, `moneda` = `amount.currency`.
+
+---
+
+# Tests Unitarios — `src/translation/translator.ts`
+
+Archivo de test sugerido: `test/unit/translation/translator.test.ts`
+
+## Estrategia general
+
+Mockear `pixToCanonical`, `speiToCanonical`, `canonicalToPix`, `canonicalToSpei`, `logger`, y `metrics` (`startLatencyTimer`, `recordTranslationError`).
+
+## Test 1: `toCanonical('PIX', ...)` invoca `pixToCanonical`
+- Verificar que se delega correctamente y el timer se detiene.
+
+## Test 2: `toCanonical('SPEI', ...)` invoca `speiToCanonical`
+- Verificar delegación.
+
+## Test 3: `toCanonical` con rail no soportado lanza TranslationError
+- Pasar rail 'SWIFT'.
+- Verificar que lanza `TranslationError` y `recordTranslationError` se llama.
+
+## Test 4: `fromCanonical('PIX', ...)` invoca `canonicalToPix`
+- Verificar delegación y que el timer se detiene.
+
+## Test 5: `fromCanonical('SPEI', ...)` invoca `canonicalToSpei`
+- Verificar delegación.
+
+## Test 6: Error en traducción registra métrica y logging
+- Mockear `pixToCanonical` para que lance error.
+- Verificar `recordTranslationError('PIX', 'unexpected')` y `log.error` llamados.
