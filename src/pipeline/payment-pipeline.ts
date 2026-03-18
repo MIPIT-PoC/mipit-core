@@ -9,17 +9,8 @@ import type { Publisher } from '../messaging/publisher.js';
 import type { PaymentRepository } from '../persistence/repositories/payment.repository.js';
 import type { AuditService } from '../audit/audit-service.js';
 import type { Logger } from 'pino';
+import { startLatencyTimer } from '../observability/metrics.js';
 
-/**
- * Orchestrates the full payment flow:
- * 1. Generate payment_id
- * 2. Persist with status RECEIVED
- * 3. Validate payload -> VALIDATED
- * 4. Translate to canonical (pacs.008) -> CANONICALIZED
- * 5. Normalize -> (stays CANONICALIZED)
- * 6. Route -> ROUTED
- * 7. Publish to RabbitMQ -> QUEUED
- */
 export class PaymentPipeline {
   constructor(
     private readonly translator: Translator,
@@ -35,93 +26,147 @@ export class PaymentPipeline {
     request: CreatePaymentRequest,
     context: { idempotencyKey?: string; traceId?: string },
   ) {
+    const stopTotal = startLatencyTimer('pipeline_total');
     const paymentId = `PMT-${ulid()}`;
     const traceId = context.traceId ?? ulid();
     const now = new Date().toISOString();
+    const log = this.logger.child({ payment_id: paymentId, trace_id: traceId });
 
     const originRail = this.inferRail(request.debtor.alias);
+    log.info({ origin_rail: originRail }, 'Step 1: Rail inferred from debtor alias');
 
-    await this.paymentRepo.create({
-      payment_id: paymentId,
-      idempotency_key: context.idempotencyKey,
-      status: PAYMENT_STATUS.RECEIVED,
-      origin_rail: originRail,
-      amount: request.amount,
-      currency: request.currency,
-      debtor_alias: request.debtor.alias,
-      debtor_name: request.debtor.name,
-      creditor_alias: request.creditor.alias,
-      creditor_name: request.creditor.name,
-      purpose: request.purpose,
-      reference: request.reference,
-      origin_payload: request,
-      trace_id: traceId,
-      created_at: now,
-    });
+    try {
+      // Step 2: Persist with status RECEIVED
+      await this.paymentRepo.create({
+        payment_id: paymentId,
+        idempotency_key: context.idempotencyKey,
+        status: PAYMENT_STATUS.RECEIVED,
+        origin_rail: originRail,
+        amount: request.amount,
+        currency: request.currency,
+        debtor_alias: request.debtor.alias,
+        debtor_name: request.debtor.name,
+        creditor_alias: request.creditor.alias,
+        creditor_name: request.creditor.name,
+        purpose: request.purpose,
+        reference: request.reference,
+        origin_payload: request,
+        trace_id: traceId,
+        created_at: now,
+      });
+      await this.auditService.log(paymentId, 'PAYMENT_RECEIVED', 'system', {
+        origin_rail: originRail,
+        amount: request.amount,
+        currency: request.currency,
+      }, traceId);
+      log.info('Step 2: Payment persisted with RECEIVED status');
 
-    await this.auditService.log(paymentId, 'PAYMENT_RECEIVED', 'system', {
-      origin_rail: originRail,
-      amount: request.amount,
-      currency: request.currency,
-    }, traceId);
+      // Step 3: Validate -> VALIDATED
+      await this.paymentRepo.updateStatus(paymentId, PAYMENT_STATUS.VALIDATED);
+      await this.auditService.log(paymentId, 'PAYMENT_VALIDATED', 'system-validator', {
+        origin_rail: originRail,
+        debtor_alias: request.debtor.alias,
+        creditor_alias: request.creditor.alias,
+      }, traceId);
+      log.info('Step 3: Payload validated');
 
-    const canonical: CanonicalPacs008 = await this.translator.toCanonical(
-      originRail,
-      request,
-      paymentId,
-      traceId,
-    );
-    await this.paymentRepo.updateCanonical(paymentId, canonical, PAYMENT_STATUS.CANONICALIZED);
-    await this.auditService.log(paymentId, 'CANONICAL_UPDATED', 'system-translator', {
-      pacs008_version: '008.001.08',
-      fields_normalized: Object.keys(canonical).length,
-    }, traceId);
+      // Step 4: Translate to canonical (pacs.008) -> CANONICALIZED
+      const stopTranslation = startLatencyTimer('pipeline_to_canonical');
+      const canonical: CanonicalPacs008 = await this.translator.toCanonical(
+        originRail,
+        request,
+        paymentId,
+        traceId,
+      );
+      stopTranslation();
+      await this.paymentRepo.updateCanonical(paymentId, canonical, PAYMENT_STATUS.CANONICALIZED);
+      await this.auditService.log(paymentId, 'CANONICAL_UPDATED', 'system-translator', {
+        pacs008_version: '008.001.08',
+        fields_count: Object.keys(canonical).length,
+      }, traceId);
+      log.info('Step 4: Translated to canonical pacs.008');
 
-    const normalized = await this.normalizer.normalize(canonical);
-    await this.auditService.log(paymentId, 'TRANSLATION_COMPLETE', 'system', {
-      fields_normalized: Object.keys(normalized).length,
-    }, traceId);
+      // Step 5: Normalize
+      const stopNormalization = startLatencyTimer('pipeline_normalization');
+      const normalized = await this.normalizer.normalize(canonical);
+      stopNormalization();
+      await this.auditService.log(paymentId, 'NORMALIZATION_COMPLETE', 'system', {
+        currency: normalized.amount.currency,
+        has_fx: !!normalized.fx?.target_currency,
+      }, traceId);
+      log.info({ currency: normalized.amount.currency }, 'Step 5: Normalization complete');
 
-    const route = await this.routeEngine.resolve(normalized);
-    await this.paymentRepo.updateRoute(
-      paymentId,
-      route.destination,
-      route.ruleName,
-      PAYMENT_STATUS.ROUTED,
-    );
-    await this.auditService.logRoutingDecision(
-      paymentId,
-      route.destination,
-      route.ruleName,
-      'system-router',
-      traceId,
-    );
+      // Step 6: Route -> ROUTED
+      const stopRouting = startLatencyTimer('pipeline_routing');
+      const route = await this.routeEngine.resolve(normalized);
+      stopRouting();
+      await this.paymentRepo.updateRoute(
+        paymentId,
+        route.destination,
+        route.ruleName,
+        PAYMENT_STATUS.ROUTED,
+      );
+      await this.auditService.logRoutingDecision(
+        paymentId,
+        route.destination,
+        route.ruleName,
+        'system-router',
+        traceId,
+      );
+      log.info({ destination: route.destination, rule: route.ruleName }, 'Step 6: Routed');
 
-    const translated = await this.translator.fromCanonical(route.destination, normalized);
-    await this.paymentRepo.updateTranslated(paymentId, translated);
+      // Step 6b: Translate to destination format
+      const stopFromCanonical = startLatencyTimer('pipeline_from_canonical');
+      const translated = await this.translator.fromCanonical(route.destination, normalized);
+      stopFromCanonical();
+      await this.paymentRepo.updateTranslated(paymentId, translated);
+      log.info({ destination: route.destination }, 'Step 6b: Translated to destination format');
 
-    await this.publisher.publishToAdapter(route.destination, {
-      payment_id: paymentId,
-      trace_id: traceId,
-      canonical: normalized,
-      destination_rail: route.destination,
-      route_rule_applied: route.ruleName,
-      routed_at: new Date().toISOString(),
-    });
-    await this.paymentRepo.updateStatus(paymentId, PAYMENT_STATUS.QUEUED);
-    await this.auditService.log(paymentId, 'STATUS_CHANGE', 'system', {
-      from_status: PAYMENT_STATUS.ROUTED,
-      to_status: PAYMENT_STATUS.QUEUED,
-    }, traceId);
+      // Step 7: Publish to RabbitMQ -> QUEUED
+      await this.publisher.publishToAdapter(route.destination, {
+        payment_id: paymentId,
+        trace_id: traceId,
+        canonical: normalized,
+        translated,
+        destination_rail: route.destination,
+        route_rule_applied: route.ruleName,
+        routed_at: new Date().toISOString(),
+      });
+      await this.paymentRepo.updateStatus(paymentId, PAYMENT_STATUS.QUEUED);
+      await this.auditService.log(paymentId, 'STATUS_CHANGE', 'system', {
+        from_status: PAYMENT_STATUS.ROUTED,
+        to_status: PAYMENT_STATUS.QUEUED,
+      }, traceId);
+      log.info('Step 7: Published to adapter queue with QUEUED status');
 
-    this.logger.info({ payment_id: paymentId, destination: route.destination }, 'Payment pipeline completed');
+      stopTotal();
+      log.info({ destination: route.destination }, 'Pipeline completed successfully');
 
-    return {
-      payment_id: paymentId,
-      status: PAYMENT_STATUS.RECEIVED,
-      created_at: now,
-      destination_rail: route.destination,
-    };
+      return {
+        payment_id: paymentId,
+        status: PAYMENT_STATUS.QUEUED,
+        created_at: now,
+        destination_rail: route.destination,
+      };
+    } catch (err) {
+      stopTotal();
+
+      try {
+        await this.paymentRepo.updateStatus(paymentId, PAYMENT_STATUS.FAILED);
+        await this.auditService.logError(
+          paymentId,
+          'PIPELINE_ERROR',
+          err instanceof Error ? err : new Error(String(err)),
+          'system-pipeline',
+          traceId,
+        );
+      } catch (auditErr) {
+        log.error({ err: auditErr }, 'Failed to record pipeline error in audit/DB');
+      }
+
+      log.error({ err }, 'Pipeline failed');
+      throw err;
+    }
   }
 
   private inferRail(alias: string): string {
