@@ -16,7 +16,7 @@ export class IdempotencyRepository {
   constructor(private readonly db: Pool) {}
 
   async findByKey(key: string): Promise<IdempotencyRecord | null> {
-    const result = await this.db.query(SQL.FIND_IDEMPOTENCY_KEY, [key]);
+    const result = await this.db.query(SQL.FIND_IDEMPOTENCY_BY_KEY, [key]);
     const record = (result.rows[0] as IdempotencyRecord) ?? null;
     logger.debug({ idempotency_key: key, found: !!record }, 'Idempotency lookup');
     return record;

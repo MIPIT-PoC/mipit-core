@@ -7,7 +7,7 @@ export class RouteRuleRepository {
   constructor(private readonly db: Pool) {}
 
   async findActive(): Promise<RouteRule[]> {
-    const result = await this.db.query(SQL.FIND_ACTIVE_RULES);
+    const result = await this.db.query(SQL.FIND_ACTIVE_ROUTE_RULES);
     const rules = result.rows as RouteRule[];
     logger.debug({ count: rules.length }, 'Loaded active route rules');
     return rules;
