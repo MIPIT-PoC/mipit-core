@@ -1,5 +1,6 @@
 import type { CanonicalPacs008 } from '../domain/models/canonical.js';
 import type { Rail } from '../config/constants.js';
+import type { MappingLoader } from './mapping-loader.js';
 import { pixToCanonical } from './pix-to-canonical.js';
 import { speiToCanonical } from './spei-to-canonical.js';
 import { canonicalToPix } from './canonical-to-pix.js';
@@ -9,6 +10,8 @@ import { logger } from '../observability/logger.js';
 import { startLatencyTimer, recordTranslationError } from '../observability/metrics.js';
 
 export class Translator {
+  constructor(private readonly mappingLoader: MappingLoader) {}
+
   async toCanonical(
     rail: Rail | string,
     payload: unknown,
@@ -24,10 +27,10 @@ export class Translator {
 
       switch (rail) {
         case 'PIX':
-          result = await pixToCanonical(payload, paymentId, traceId);
+          result = await pixToCanonical(payload, paymentId, this.mappingLoader, traceId);
           break;
         case 'SPEI':
-          result = await speiToCanonical(payload, paymentId, traceId);
+          result = await speiToCanonical(payload, paymentId, this.mappingLoader, traceId);
           break;
         default:
           throw new TranslationError(rail, `Unsupported origin rail: ${rail}`);

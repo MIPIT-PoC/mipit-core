@@ -35,6 +35,7 @@ jest.mock('../../../src/translation/canonical-to-spei.js', () => ({
 }));
 
 import { Translator } from '../../../src/translation/translator.js';
+import type { MappingLoader } from '../../../src/translation/mapping-loader.js';
 import { TranslationError } from '../../../src/domain/errors/index.js';
 import { pixToCanonical } from '../../../src/translation/pix-to-canonical.js';
 import { speiToCanonical } from '../../../src/translation/spei-to-canonical.js';
@@ -48,11 +49,16 @@ const fakeCanonical = {
   amount: { value: 100, currency: 'BRL' },
 } as any;
 
+const mockMappingLoader = {
+  loadMappings: jest.fn().mockResolvedValue(new Map()),
+  clearCache: jest.fn(),
+} as unknown as jest.Mocked<MappingLoader>;
+
 describe('Translator', () => {
   let translator: Translator;
 
   beforeEach(() => {
-    translator = new Translator();
+    translator = new Translator(mockMappingLoader);
     jest.clearAllMocks();
   });
 
@@ -62,7 +68,7 @@ describe('Translator', () => {
 
       const result = await translator.toCanonical('PIX', {}, 'PMT-TEST1234567890ABCDEF');
       expect(result).toBe(fakeCanonical);
-      expect(pixToCanonical).toHaveBeenCalledWith({}, 'PMT-TEST1234567890ABCDEF', undefined);
+      expect(pixToCanonical).toHaveBeenCalledWith({}, 'PMT-TEST1234567890ABCDEF', mockMappingLoader, undefined);
     });
 
     it('should delegate SPEI to speiToCanonical', async () => {
@@ -70,7 +76,7 @@ describe('Translator', () => {
 
       const result = await translator.toCanonical('SPEI', {}, 'PMT-TEST1234567890ABCDEF', 'trace-1');
       expect(result).toBe(fakeCanonical);
-      expect(speiToCanonical).toHaveBeenCalledWith({}, 'PMT-TEST1234567890ABCDEF', 'trace-1');
+      expect(speiToCanonical).toHaveBeenCalledWith({}, 'PMT-TEST1234567890ABCDEF', mockMappingLoader, 'trace-1');
     });
 
     it('should throw TranslationError for unsupported rail', async () => {

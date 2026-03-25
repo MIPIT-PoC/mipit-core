@@ -9,6 +9,7 @@ jest.mock('../../../src/observability/logger.js', () => ({
 }));
 
 import { pixToCanonical } from '../../../src/translation/pix-to-canonical.js';
+import type { MappingLoader } from '../../../src/translation/mapping-loader.js';
 import { TranslationError } from '../../../src/domain/errors/index.js';
 
 const VALID_PAYMENT_ID = 'PMT-ABCDEFGHIJ1234567890';
@@ -22,9 +23,32 @@ const baseRequest = {
   reference: 'TEST-001',
 };
 
+// Mock MappingLoader que devuelve un Map vacío (fallback a defaults)
+const mockLoaderEmpty = {
+  loadMappings: jest.fn().mockResolvedValue(new Map()),
+  clearCache: jest.fn(),
+} as unknown as jest.Mocked<MappingLoader>;
+
+// Mock MappingLoader con mappings básicos
+const createMockLoaderWithMappings = () => {
+  const mappings = new Map([
+    ['amount', { targetField: 'amount.value', transformation: 'numeric', validation: undefined }],
+    ['creditor.alias', { targetField: 'alias.value', transformation: 'strip_pix_prefix', validation: undefined }],
+  ]);
+  return {
+    loadMappings: jest.fn().mockResolvedValue(mappings),
+    clearCache: jest.fn(),
+  } as unknown as jest.Mocked<MappingLoader>;
+};
+
 describe('pixToCanonical', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
   it('should translate a valid PIX payload to canonical pacs.008', async () => {
-    const result = await pixToCanonical(baseRequest, VALID_PAYMENT_ID, 'trace-1');
+    const loader = mockLoaderEmpty;
+    const result = await pixToCanonical(baseRequest, VALID_PAYMENT_ID, loader, 'trace-1');
 
     expect(result.payment_id).toBe(VALID_PAYMENT_ID);
     expect(result.origin.rail).toBe('PIX');
@@ -38,34 +62,57 @@ describe('pixToCanonical', () => {
   });
 
   it('should extract alias value by stripping PIX- prefix', async () => {
-    const result = await pixToCanonical(baseRequest, VALID_PAYMENT_ID);
+    const loader = mockLoaderEmpty;
+    const result = await pixToCanonical(baseRequest, VALID_PAYMENT_ID, loader);
     expect(result.alias.value).toBe('abc123');
   });
 
   it('should keep alias value as-is if no PIX- prefix', async () => {
+    const loader = mockLoaderEmpty;
     const req = { ...baseRequest, creditor: { ...baseRequest.creditor, alias: 'rawkey' } };
-    const result = await pixToCanonical(req, VALID_PAYMENT_ID);
+    const result = await pixToCanonical(req, VALID_PAYMENT_ID, loader);
     expect(result.alias.value).toBe('rawkey');
   });
 
   it('should default currency to BRL when not provided', async () => {
+    const loader = mockLoaderEmpty;
     const req = { ...baseRequest, currency: undefined };
-    const result = await pixToCanonical(req, VALID_PAYMENT_ID);
+    const result = await pixToCanonical(req, VALID_PAYMENT_ID, loader);
     expect(result.amount.currency).toBe('BRL');
   });
 
   it('should throw TranslationError for negative amount', async () => {
+    const loader = mockLoaderEmpty;
     const req = { ...baseRequest, amount: -10 };
-    await expect(pixToCanonical(req, VALID_PAYMENT_ID)).rejects.toThrow(TranslationError);
+    await expect(pixToCanonical(req, VALID_PAYMENT_ID, loader)).rejects.toThrow(TranslationError);
   });
 
   it('should include trace_id when provided', async () => {
-    const result = await pixToCanonical(baseRequest, VALID_PAYMENT_ID, 'my-trace');
+    const loader = mockLoaderEmpty;
+    const result = await pixToCanonical(baseRequest, VALID_PAYMENT_ID, loader, 'my-trace');
     expect(result.trace_id).toBe('my-trace');
   });
 
   it('should leave trace_id undefined when not provided', async () => {
-    const result = await pixToCanonical(baseRequest, VALID_PAYMENT_ID);
+    const loader = mockLoaderEmpty;
+    const result = await pixToCanonical(baseRequest, VALID_PAYMENT_ID, loader);
     expect(result.trace_id).toBeUndefined();
   });
+
+  it('should load mappings from MappingLoader', async () => {
+    const loader = createMockLoaderWithMappings();
+    await pixToCanonical(baseRequest, VALID_PAYMENT_ID, loader);
+    
+    expect(loader.loadMappings).toHaveBeenCalledWith('PIX', 'TO_CANONICAL');
+  });
+
+  it('should apply dynamic mappings when available', async () => {
+    const loader = createMockLoaderWithMappings();
+    const result = await pixToCanonical(baseRequest, VALID_PAYMENT_ID, loader);
+    
+    // Should apply the strip_pix_prefix transformation via mappings
+    expect(result.alias.value).toBe('abc123');
+    expect(loader.loadMappings).toHaveBeenCalled();
+  });
 });
+
