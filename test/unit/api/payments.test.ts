@@ -1,7 +1,8 @@
-import { createPaymentSchema } from '../../../src/api/schemas/payment-request.js';
+import { createPaymentSchema } from '../../../src/api/schemas/payment-request';
+import { paymentDetailSchema, paymentAcceptedSchema } from '../../../src/api/schemas/payment-response';
 
-describe('POST /payments', () => {
-  describe('createPaymentSchema validation', () => {
+describe('Payment schemas', () => {
+  describe('createPaymentSchema', () => {
     it('should accept a valid payment request', () => {
       const valid = {
         amount: 100,
@@ -59,13 +60,59 @@ describe('POST /payments', () => {
       const result = createPaymentSchema.parse(noPurpose);
       expect(result.purpose).toBe('P2P');
     });
+
+    it('should reject currency with wrong length', () => {
+      const invalid = {
+        amount: 100,
+        currency: 'US',
+        debtor: { alias: 'PIX-key-123' },
+        creditor: { alias: 'SPEI-CLABE-456' },
+      };
+
+      const result = createPaymentSchema.safeParse(invalid);
+      expect(result.success).toBe(false);
+    });
   });
 
-  describe('route handler', () => {
-    it.todo('should return 202 with payment_id and status');
+  describe('paymentAcceptedSchema', () => {
+    it('should validate a proper accepted response', () => {
+      const response = {
+        payment_id: 'PMT-123',
+        status: 'QUEUED',
+        received_at: '2026-03-01T12:00:00.000Z',
+        destination: 'SPEI',
+      };
 
-    it.todo('should return 404 for non-existent payment GET');
+      expect(paymentAcceptedSchema.safeParse(response).success).toBe(true);
+    });
+  });
 
-    it.todo('should propagate idempotency-key header');
+  describe('paymentDetailSchema', () => {
+    it('should validate a full payment detail', () => {
+      const detail = {
+        payment_id: 'PMT-123',
+        status: 'COMPLETED',
+        origin: 'PIX',
+        destination: 'SPEI',
+        amount: 100,
+        currency: 'BRL',
+        original: {},
+        canonical: null,
+        translated: null,
+        rail_ack: null,
+        timestamps: {
+          created_at: '2026-03-01T12:00:00.000Z',
+          validated_at: null,
+          canonicalized_at: null,
+          routed_at: null,
+          queued_at: null,
+          sent_at: null,
+          acked_at: null,
+          completed_at: null,
+        },
+      };
+
+      expect(paymentDetailSchema.safeParse(detail).success).toBe(true);
+    });
   });
 });
