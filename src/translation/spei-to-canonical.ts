@@ -61,6 +61,29 @@ function setNestedValue(obj: Record<string, unknown>, path: string, value: unkno
 }
 
 /**
+ * Validates a value against a validation rule string from the DB.
+ * Supported formats: "regex:<pattern>", "minLength:<n>", "maxLength:<n>", "enum:<a,b,c>"
+ */
+function applyValidation(value: unknown, validation: string): boolean {
+  const str = String(value ?? '');
+
+  if (validation.startsWith('regex:')) {
+    return new RegExp(validation.slice(6)).test(str);
+  }
+  if (validation.startsWith('minLength:')) {
+    return str.length >= Number(validation.slice(10));
+  }
+  if (validation.startsWith('maxLength:')) {
+    return str.length <= Number(validation.slice(10));
+  }
+  if (validation.startsWith('enum:')) {
+    const allowed = validation.slice(5).split(',').map((s) => s.trim());
+    return allowed.includes(str);
+  }
+  return true;
+}
+
+/**
  * Traduce un payload SPEI al modelo canónico pacs.008 usando mappings desde DB
  */
 export async function speiToCanonical(
@@ -116,10 +139,12 @@ export async function speiToCanonical(
       if (sourceValue !== undefined && sourceValue !== null) {
         let transformedValue = applyTransformation(sourceValue, mapping.transformation);
 
-        // Validar si hay regla de validación
         if (mapping.validation) {
-          // TODO: Implementar validaciones dinámicas según reglas guardadas en DB
-          log.debug({ field: sourceField, validation: mapping.validation }, 'Validation rule found for field');
+          const valid = applyValidation(transformedValue, mapping.validation);
+          if (!valid) {
+            log.warn({ field: sourceField, validation: mapping.validation, value: transformedValue }, 'Dynamic validation failed');
+            continue;
+          }
         }
 
         setNestedValue(raw, mapping.targetField, transformedValue);

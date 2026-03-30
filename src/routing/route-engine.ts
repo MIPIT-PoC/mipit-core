@@ -57,7 +57,7 @@ export class RouteEngine {
       case 'destination_country':
         return canonical.creditor?.country === condition_value;
       case 'availability':
-        return false;
+        return condition_value === 'always' || condition_value === 'true';
       default:
         return false;
     }
