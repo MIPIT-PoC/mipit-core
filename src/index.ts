@@ -22,6 +22,8 @@ import { RouteEngine } from './routing/route-engine.js';
 import { Publisher } from './messaging/publisher.js';
 import { PaymentPipeline } from './pipeline/payment-pipeline.js';
 import { AckConsumer } from './messaging/consumer.js';
+import { WebhookRepository } from './webhooks/webhook.repository.js';
+import { WebhookService } from './webhooks/webhook.service.js';
 
 async function main() {
   const db = await connectDb(env.DATABASE_URL);
@@ -32,6 +34,8 @@ async function main() {
   const idempotencyRepo = new IdempotencyRepository(db);
   const mappingRepo = new MappingRepository(db);
   const routeRuleRepo = new RouteRuleRepository(db);
+  const webhookRepo = new WebhookRepository(db);
+  const webhookService = new WebhookService(webhookRepo, env.WEBHOOK_SECRET);
 
   const auditService = new AuditService(auditRepo);
   const mappingLoader = new MappingLoader(mappingRepo);
@@ -62,9 +66,10 @@ async function main() {
     auditService,
     translator,
     mappingLoader,
+    webhookRepo,
   });
 
-  const ackConsumer = new AckConsumer(channel, paymentRepo, auditService);
+  const ackConsumer = new AckConsumer(channel, paymentRepo, auditService, webhookService);
   await ackConsumer.start();
   logger.info('AckConsumer started and listening for ACK messages');
 

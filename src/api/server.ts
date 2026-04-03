@@ -19,6 +19,7 @@ import type { PaymentRepository } from '../persistence/repositories/payment.repo
 import type { AuditRepository } from '../persistence/repositories/audit.repository.js';
 import type { IdempotencyRepository } from '../persistence/repositories/idempotency.repository.js';
 import type { AuditService } from '../audit/audit-service.js';
+import type { WebhookRepository } from '../webhooks/webhook.repository.js';
 
 export interface ServerDeps {
   db: Pool;
@@ -31,6 +32,7 @@ export interface ServerDeps {
   auditService: AuditService;
   translator: Translator;
   mappingLoader: MappingLoader;
+  webhookRepo: WebhookRepository;
 }
 
 export async function buildServer(deps: ServerDeps) {

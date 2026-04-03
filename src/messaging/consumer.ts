@@ -2,6 +2,7 @@ import type { Channel } from 'amqplib';
 import { QUEUES, PAYMENT_STATUS } from '../config/constants.js';
 import type { PaymentRepository } from '../persistence/repositories/payment.repository.js';
 import type { AuditService } from '../audit/audit-service.js';
+import type { WebhookService } from '../webhooks/webhook.service.js';
 import { logger } from '../observability/logger.js';
 import { recordPayment } from '../observability/metrics.js';
 
@@ -27,6 +28,7 @@ export class AckConsumer {
     private channel: Channel,
     private paymentRepo: PaymentRepository,
     private auditService: AuditService,
+    private webhookService?: WebhookService,
   ) {}
 
   async start() {
@@ -62,10 +64,10 @@ export class AckConsumer {
           finalStatus = PAYMENT_STATUS.FAILED;
         }
 
-        await this.paymentRepo.updateAck(ack.payment_id, ack.rail_ack, finalStatus);
+        const updatedPayment = await this.paymentRepo.updateRailAck(ack.payment_id, ack.rail_ack, finalStatus);
         log.info({ final_status: finalStatus, latency_ms: ack.latency_ms }, 'Payment status updated from ACK');
 
-        const actor = ack.source_rail === 'PIX' ? 'adapter-pix' : 'adapter-spei';
+        const actor = `adapter-${ack.source_rail.toLowerCase()}`;
         await this.auditService.log(
           ack.payment_id,
           'ACK_RECEIVED',
@@ -83,6 +85,14 @@ export class AckConsumer {
         );
 
         recordPayment(finalStatus, ack.source_rail, ack.source_rail === 'PIX' ? 'SPEI' : 'PIX');
+
+        // Fire webhooks for terminal status (COMPLETED / FAILED / REJECTED)
+        if (this.webhookService) {
+          this.webhookService.fireForPayment(updatedPayment).catch((err) => {
+            log.warn({ err }, 'Webhook delivery error (non-blocking)');
+          });
+        }
+
         this.channel.ack(msg);
         log.info('ACK message processed successfully');
       } catch (err) {

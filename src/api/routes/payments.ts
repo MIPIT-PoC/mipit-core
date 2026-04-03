@@ -4,9 +4,16 @@ import { createPaymentSchema } from '../schemas/payment-request.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import { NotFoundError } from '../../domain/errors/index.js';
 import { logger } from '../../observability/logger.js';
+import { z } from 'zod';
+
+const registerWebhookSchema = z.object({
+  url: z.string().url('url must be a valid HTTP/HTTPS URL'),
+  events: z.array(z.enum(['COMPLETED', 'FAILED', 'REJECTED'])).optional(),
+  secret: z.string().min(8).optional(),
+});
 
 export async function paymentRoutes(app: FastifyInstance, deps: ServerDeps) {
-  const { pipeline, paymentRepo, auditRepo, idempotencyRepo } = deps;
+  const { pipeline, paymentRepo, auditRepo, idempotencyRepo, webhookRepo } = deps;
   const idempotencyHook = idempotencyMiddleware(idempotencyRepo);
 
   app.post(
@@ -100,4 +107,63 @@ export async function paymentRoutes(app: FastifyInstance, deps: ServerDeps) {
       });
     },
   );
+
+  /**
+   * POST /payments/:paymentId/webhook
+   * Register a webhook URL to be notified when the payment reaches a terminal status.
+   * Body: { url, events?, secret? }
+   * Response: the created webhook subscription
+   */
+  app.post('/payments/:paymentId/webhook', async (request, reply) => {
+    const { paymentId } = request.params as { paymentId: string };
+
+    const payment = await paymentRepo.findById(paymentId);
+    if (!payment) {
+      throw new NotFoundError('Payment', paymentId);
+    }
+
+    const body = registerWebhookSchema.parse(request.body);
+
+    const sub = await webhookRepo.create({
+      payment_id: paymentId,
+      url: body.url,
+      events: body.events,
+      secret: body.secret,
+    });
+
+    logger.info({ payment_id: paymentId, webhook_id: sub.id, url: body.url }, 'Webhook subscription registered');
+
+    return reply.status(201).send({
+      id: sub.id,
+      payment_id: sub.payment_id,
+      url: sub.url,
+      events: sub.events,
+      created_at: sub.created_at,
+    });
+  });
+
+  /**
+   * GET /payments/:paymentId/webhooks
+   * List all webhook subscriptions for a payment.
+   */
+  app.get('/payments/:paymentId/webhooks', async (request, reply) => {
+    const { paymentId } = request.params as { paymentId: string };
+
+    const payment = await paymentRepo.findById(paymentId);
+    if (!payment) {
+      throw new NotFoundError('Payment', paymentId);
+    }
+
+    const subs = await webhookRepo.findByPaymentId(paymentId);
+    return reply.send(subs.map((s) => ({
+      id: s.id,
+      url: s.url,
+      events: s.events,
+      fired_at: s.fired_at,
+      last_http_status: s.last_http_status,
+      delivery_attempts: s.delivery_attempts,
+      last_error: s.last_error,
+      created_at: s.created_at,
+    })));
+  });
 }

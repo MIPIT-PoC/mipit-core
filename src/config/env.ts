@@ -10,6 +10,8 @@ const envSchema = z.object({
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url('OTEL_EXPORTER_OTLP_ENDPOINT must be a valid URL').describe('OpenTelemetry OTLP endpoint'),
   OTEL_SERVICE_NAME: z.string().min(1, 'OTEL_SERVICE_NAME cannot be empty').default('mipit-core').describe('OpenTelemetry service name'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info').describe('Logging level'),
+  OPEN_EXCHANGE_RATES_APP_ID: z.string().optional().describe('Open Exchange Rates API key (optional — uses fallback rates if not set)'),
+  WEBHOOK_SECRET: z.string().min(16).optional().describe('HMAC secret for signing webhook payloads'),
 });
 
 function validateEnv() {

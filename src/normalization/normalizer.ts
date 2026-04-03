@@ -15,7 +15,7 @@ export class Normalizer {
     let result = { ...canonical };
 
     result = normalizeDates(result);
-    result = normalizeCurrency(result);
+    result = await normalizeCurrency(result);   // async: may call Open Exchange Rates API
     result = normalizeIds(result);
     result = applyFallbacks(result);
 
