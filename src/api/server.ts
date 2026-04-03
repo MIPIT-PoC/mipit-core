@@ -7,6 +7,9 @@ import type { Channel } from 'amqplib';
 import { paymentRoutes } from './routes/payments.js';
 import { healthRoutes } from './routes/health.js';
 import { metricsRoutes } from './routes/metrics.js';
+import { translateRoutes } from './routes/translate.js';
+import type { Translator } from '../translation/translator.js';
+import type { MappingLoader } from '../translation/mapping-loader.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { tracingMiddleware } from './middleware/tracing.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -26,6 +29,8 @@ export interface ServerDeps {
   auditRepo: AuditRepository;
   idempotencyRepo: IdempotencyRepository;
   auditService: AuditService;
+  translator: Translator;
+  mappingLoader: MappingLoader;
 }
 
 export async function buildServer(deps: ServerDeps) {
@@ -47,6 +52,7 @@ export async function buildServer(deps: ServerDeps) {
   await app.register(async (scoped) => {
     scoped.addHook('onRequest', authMiddleware);
     await paymentRoutes(scoped, deps);
+    await translateRoutes(scoped, { translator: deps.translator, mappingLoader: deps.mappingLoader });
   });
 
   logger.info('Fastify server built and routes registered');

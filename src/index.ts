@@ -60,6 +60,8 @@ async function main() {
     auditRepo,
     idempotencyRepo,
     auditService,
+    translator,
+    mappingLoader,
   });
 
   const ackConsumer = new AckConsumer(channel, paymentRepo, auditService);
