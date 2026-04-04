@@ -7,9 +7,9 @@ export async function connectDb(connectionString: string): Promise<Pool> {
   try {
     pool = new Pool({
       connectionString,
-      max: 20,
+      max: 50,
       idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
+      connectionTimeoutMillis: 10_000,
     });
 
     pool.on('error', (err) => {

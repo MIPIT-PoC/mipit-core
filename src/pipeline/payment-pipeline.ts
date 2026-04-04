@@ -172,6 +172,7 @@ export class PaymentPipeline {
   private inferRail(alias: string): string {
     if (alias.startsWith('PIX-')) return 'PIX';
     if (alias.startsWith('SPEI-')) return 'SPEI';
+    if (alias.startsWith('BREB-')) return 'BRE_B';
     throw new Error(`Cannot infer rail from alias: ${alias}`);
   }
 }

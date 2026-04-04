@@ -222,7 +222,7 @@ export async function iso20022MxToCanonical(
         address: txn.Cdtr.PstlAdr?.AdrLine?.slice(0, 4),
       },
       alias: {
-        type: (creditorIban ? 'IBAN' : 'ACCOUNT') as const,
+        type: (creditorIban ? 'IBAN' : 'ACCOUNT') as 'IBAN' | 'ACCOUNT',
         value: creditorAccountId,
       },
       purpose: purpose.substring(0, 35),

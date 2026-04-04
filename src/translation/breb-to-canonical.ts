@@ -131,7 +131,24 @@ function inferTipoLlave(llave: string): BreBKeyType {
 }
 
 /**
+ * Detect whether the payload is a native BreBPaymentRequest or a generic API request.
+ */
+function isNativeBrebPayload(payload: Record<string, unknown>): boolean {
+  return 'valor' in payload && 'pagador' in payload && 'beneficiario' in payload;
+}
+
+/**
+ * Strip rail prefix from alias value.
+ */
+function stripBrebPrefix(alias: string): string {
+  return alias.startsWith('BREB-') ? alias.slice(5) : alias;
+}
+
+/**
  * Translates a Bre-B payment request to the canonical pacs.008 model.
+ * Supports both:
+ *   - Native BreBPaymentRequest (from /translate endpoints or direct BanRep format)
+ *   - Generic API request (from POST /payments with { amount, currency, debtor, creditor })
  */
 export async function brebToCanonical(
   payload: BreBPaymentRequest | Record<string, unknown>,
@@ -141,71 +158,100 @@ export async function brebToCanonical(
   const log = logger.child({ payment_id: paymentId, rail: 'BRE_B' });
 
   try {
-    const msg = payload as BreBPaymentRequest;
     const now = new Date().toISOString();
-    const amount = parseFloat(msg.valor.original);
+    let raw: Record<string, unknown>;
 
-    const tipoLlave = msg.tipoLlave ?? inferTipoLlave(msg.llave);
-    const debtorId = msg.pagador.nit ?? msg.pagador.cc ?? msg.pagador.numeroCuenta ?? 'UNKNOWN';
-    const creditorId = msg.beneficiario.nit ?? msg.beneficiario.cc ?? msg.beneficiario.numeroCuenta ?? msg.llave;
+    if (isNativeBrebPayload(payload as Record<string, unknown>)) {
+      const msg = payload as BreBPaymentRequest;
+      const amount = parseFloat(msg.valor.original);
+      const tipoLlave = msg.tipoLlave ?? inferTipoLlave(msg.llave);
+      const debtorId = msg.pagador.nit ?? msg.pagador.cc ?? msg.pagador.numeroCuenta ?? 'UNKNOWN';
+      const creditorId = msg.beneficiario.nit ?? msg.beneficiario.cc ?? msg.beneficiario.numeroCuenta ?? msg.llave;
 
-    const raw = {
-      payment_id: paymentId,
-      created_at: msg.fechaHora ?? now,
+      raw = {
+        payment_id: paymentId,
+        created_at: msg.fechaHora ?? now,
+        grpHdr: {
+          msgId: msg.idTransaccion ?? `MSG-${ulid()}`,
+          creDtTm: msg.fechaHora ?? now,
+          nbOfTxs: 1,
+          sttlmInf: { sttlmMtd: 'CLRG' as const },
+        },
+        pmtId: {
+          endToEndId: msg.idTransaccion.substring(0, 35),
+        },
+        amount: { value: amount, currency: 'COP' },
+        origin: { rail: 'BRE_B' as const, ispb: msg.pagador.codigoEntidad },
+        destination: { rail: undefined, ispb: msg.beneficiario.codigoEntidad },
+        debtor: {
+          name: msg.pagador.nombre?.substring(0, 140),
+          country: 'CO',
+          account_id: `${msg.pagador.codigoEntidad}/${debtorId}`,
+          taxId: msg.pagador.nit ?? msg.pagador.cc,
+          accountType: (msg.pagador.tipoCuenta as 'CACC' | 'SVGS' | 'TRAN' | 'SLRY') ?? 'CACC',
+        },
+        creditor: {
+          name: msg.beneficiario.nombre?.substring(0, 140),
+          country: 'CO',
+          account_id: `${msg.beneficiario.codigoEntidad}/${creditorId}`,
+          taxId: msg.beneficiario.nit ?? msg.beneficiario.cc,
+          accountType: (msg.beneficiario.tipoCuenta as 'CACC' | 'SVGS' | 'TRAN' | 'SLRY') ?? 'CACC',
+        },
+        alias: { type: 'LLAVE_BREB' as const, value: msg.llave },
+        purpose: tipoLlave === 'NIT' ? 'SUPP' : 'P2P',
+        reference: msg.idTransaccion,
+        remittanceInfo: msg.concepto?.substring(0, 140),
+        status: 'RECEIVED',
+        trace_id: traceId,
+      };
+    } else {
+      const req = payload as {
+        amount: number;
+        currency?: string;
+        debtor: { alias: string; name?: string };
+        creditor: { alias: string; name?: string };
+        purpose?: string;
+        reference?: string;
+      };
 
-      grpHdr: {
-        msgId: msg.idTransaccion ?? `MSG-${ulid()}`,
-        creDtTm: msg.fechaHora ?? now,
-        nbOfTxs: 1,
-        sttlmInf: { sttlmMtd: 'CLRG' as const },
-      },
+      const creditorLlave = stripBrebPrefix(req.creditor.alias);
+      const tipoLlave = inferTipoLlave(creditorLlave);
+      const txId = generateBrebTransactionId();
 
-      pmtId: {
-        endToEndId: msg.idTransaccion.substring(0, 35),
-      },
-
-      amount: {
-        value: amount,
-        currency: 'COP',
-      },
-
-      origin: {
-        rail: 'BRE_B' as const,
-        ispb: msg.pagador.codigoEntidad,  // reuse ispb field for codigoEntidad
-      },
-
-      destination: {
-        rail: undefined,
-        ispb: msg.beneficiario.codigoEntidad,
-      },
-
-      debtor: {
-        name: msg.pagador.nombre?.substring(0, 140),
-        country: 'CO',
-        account_id: `${msg.pagador.codigoEntidad}/${debtorId}`,
-        taxId: msg.pagador.nit ?? msg.pagador.cc,
-        accountType: (msg.pagador.tipoCuenta as 'CACC' | 'SVGS' | 'TRAN' | 'SLRY') ?? 'CACC',
-      },
-
-      creditor: {
-        name: msg.beneficiario.nombre?.substring(0, 140),
-        country: 'CO',
-        account_id: `${msg.beneficiario.codigoEntidad}/${creditorId}`,
-        taxId: msg.beneficiario.nit ?? msg.beneficiario.cc,
-        accountType: (msg.beneficiario.tipoCuenta as 'CACC' | 'SVGS' | 'TRAN' | 'SLRY') ?? 'CACC',
-      },
-
-      alias: {
-        type: 'LLAVE_BREB' as const,
-        value: msg.llave,
-      },
-
-      purpose: tipoLlave === 'NIT' ? 'SUPP' : 'P2P',
-      reference: msg.idTransaccion,
-      remittanceInfo: msg.concepto?.substring(0, 140),
-      status: 'RECEIVED',
-      trace_id: traceId,
-    };
+      raw = {
+        payment_id: paymentId,
+        created_at: now,
+        grpHdr: {
+          msgId: txId,
+          creDtTm: now,
+          nbOfTxs: 1,
+          sttlmInf: { sttlmMtd: 'CLRG' as const },
+        },
+        pmtId: { endToEndId: txId.substring(0, 35) },
+        amount: {
+          value: req.amount,
+          currency: (req.currency ?? 'COP').toUpperCase(),
+        },
+        fx: { source_currency: 'COP' },
+        origin: { rail: 'BRE_B' as const, ispb: BREB_ENTITY_CODES.FINTECH_SIMULATED },
+        destination: { rail: undefined },
+        debtor: {
+          name: req.debtor.name ?? 'Unknown',
+          country: 'CO',
+          account_id: req.debtor.alias,
+        },
+        creditor: {
+          name: req.creditor.name ?? 'Unknown',
+          country: undefined,
+          account_id: req.creditor.alias,
+        },
+        alias: { type: 'LLAVE_BREB' as const, value: creditorLlave },
+        purpose: req.purpose ?? (tipoLlave === 'NIT' ? 'SUPP' : 'P2P'),
+        reference: req.reference ?? `BREB-${ulid()}`,
+        status: 'RECEIVED',
+        trace_id: traceId,
+      };
+    }
 
     const result = canonicalPacs008Schema.safeParse(raw);
     if (!result.success) {

@@ -6,8 +6,15 @@ export class Publisher {
   constructor(private readonly channel: Channel) {}
 
   async publishToAdapter(destinationRail: string, message: Record<string, unknown>): Promise<void> {
-    const routingKey =
-      destinationRail === 'PIX' ? ROUTING_KEYS.ROUTE_PIX : ROUTING_KEYS.ROUTE_SPEI;
+    const railKeyMap: Record<string, string> = {
+      PIX: ROUTING_KEYS.ROUTE_PIX,
+      SPEI: ROUTING_KEYS.ROUTE_SPEI,
+      BRE_B: ROUTING_KEYS.ROUTE_BREB,
+    };
+    const routingKey = railKeyMap[destinationRail];
+    if (!routingKey) {
+      throw new Error(`No routing key configured for rail: ${destinationRail}`);
+    }
 
     this.channel.publish(
       EXCHANGES.PAYMENTS,

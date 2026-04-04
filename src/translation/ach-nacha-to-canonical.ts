@@ -185,12 +185,6 @@ export async function achNachaToCanonical(
     const now = new Date().toISOString();
     const amountUsd = entry.amount / 100; // Convert cents to dollars
 
-    // Effective entry date: YYMMDD → YYYY-MM-DD
-    const yymmdd = batch.effectiveEntryDate;
-    const year = parseInt(yymmdd.slice(0, 2), 10);
-    const isoDate = `${year >= 70 ? '19' : '20'}${yymmdd.slice(0, 2)}-${yymmdd.slice(2, 4)}-${yymmdd.slice(4, 6)}`;
-    const dateTime = `${isoDate}T00:00:00.000Z`;
-
     // Trace number = unique reference
     const traceNumber = entry.traceNumber
       ?? `${batch.originatingDfiId}${Math.floor(Math.random() * 99999999).toString().padStart(7, '0')}`;
@@ -223,7 +217,7 @@ export async function achNachaToCanonical(
       },
       debtor: {
         name: (originator?.name ?? batch.companyName).substring(0, 140),
-        country: originator?.city ? 'US' : undefined,
+        country: 'US',
         account_id: originator?.accountNumber ?? batch.companyId,
         taxId: originator?.taxId,
       },

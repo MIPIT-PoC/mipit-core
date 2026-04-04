@@ -37,9 +37,10 @@ export async function canonicalToBreb(
       : creditorAccountRaw;
 
     // Derive llave from alias (if already a Bre-B alias) or use creditor account
-    const llave = canonical.alias.type === 'LLAVE_BREB'
+    const rawLlave = canonical.alias.type === 'LLAVE_BREB'
       ? canonical.alias.value
       : creditorAccount;
+    const llave = rawLlave.replace(/^BREB-/, '');
 
     const idTransaccion = generateBrebTransactionId(pagadorEntidad);
 

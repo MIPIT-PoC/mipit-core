@@ -52,6 +52,7 @@ export class RouteEngine {
         const credAlias = canonical.creditor?.account_id ?? '';
         if (credAlias.startsWith('PIX-')) return condition_value === 'PIX_KEY';
         if (credAlias.startsWith('SPEI-')) return condition_value === 'CLABE';
+        if (credAlias.startsWith('BREB-')) return condition_value === 'LLAVE_BREB';
         return false;
       }
       case 'destination_country':

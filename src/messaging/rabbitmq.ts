@@ -15,6 +15,7 @@ export async function connectRabbitMQ(url: string): Promise<{ connection: Channe
   await channel.assertQueue(QUEUES.ACK, { durable: true });
   await channel.bindQueue(QUEUES.ACK, EXCHANGES.PAYMENTS, ROUTING_KEYS.ACK_PIX);
   await channel.bindQueue(QUEUES.ACK, EXCHANGES.PAYMENTS, ROUTING_KEYS.ACK_SPEI);
+  await channel.bindQueue(QUEUES.ACK, EXCHANGES.PAYMENTS, ROUTING_KEYS.ACK_BREB);
 
   logger.info('RabbitMQ connected and topology declared');
 

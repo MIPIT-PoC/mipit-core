@@ -31,7 +31,7 @@ export async function canonicalToIso20022Mx(canonical: CanonicalPacs008): Promis
       CreDtTm: creDtTm,
       NbOfTxs: '1',
       SttlmInf: {
-        SttlmMtd: (canonical.grpHdr as Record<string, unknown>)?.sttlmInf?.['sttlmMtd'] as 'CLRG' ?? 'CLRG',
+        SttlmMtd: ((canonical.grpHdr as Record<string, unknown>)?.sttlmInf as Record<string, unknown>)?.['sttlmMtd'] as 'CLRG' ?? 'CLRG',
       },
       InstgAgt: canonical.origin.bic
         ? { FinInstnId: { BICFI: canonical.origin.bic } }
