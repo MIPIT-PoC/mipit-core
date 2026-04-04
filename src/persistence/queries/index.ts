@@ -63,7 +63,9 @@ export const SQL = {
 
   INSERT_IDEMPOTENCY: `
     INSERT INTO idempotency_keys (idempotency_key, payment_id, request_hash, response_status, response_body, created_at)
-    VALUES ($1,$2,$3,$4,$5,$6)`,
+    VALUES ($1,$2,$3,$4,$5,$6)
+    ON CONFLICT (idempotency_key) DO NOTHING
+    RETURNING payment_id`,
 
   UPDATE_IDEMPOTENCY_RESPONSE: `
     UPDATE idempotency_keys SET response_status = $1, response_body = $2 WHERE idempotency_key = $3`,

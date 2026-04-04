@@ -34,6 +34,24 @@ export class IdempotencyRepository {
     logger.debug({ idempotency_key: record.idempotency_key, payment_id: record.payment_id }, 'Idempotency key inserted');
   }
 
+  /**
+   * Atomically tries to insert an idempotency record.
+   * Returns true if inserted (this request won the race), false if another request already claimed the key.
+   */
+  async tryInsert(record: Pick<IdempotencyRecord, 'idempotency_key' | 'payment_id' | 'request_hash' | 'created_at'>): Promise<boolean> {
+    const result = await this.db.query(SQL.INSERT_IDEMPOTENCY, [
+      record.idempotency_key,
+      record.payment_id,
+      record.request_hash,
+      null,
+      null,
+      record.created_at,
+    ]);
+    const claimed = (result.rowCount ?? 0) > 0;
+    logger.debug({ idempotency_key: record.idempotency_key, payment_id: record.payment_id, claimed }, 'Idempotency tryInsert');
+    return claimed;
+  }
+
   async updateResponse(key: string, status: number, body: unknown): Promise<void> {
     await this.db.query(SQL.UPDATE_IDEMPOTENCY_RESPONSE, [status, JSON.stringify(body), key]);
     logger.debug({ idempotency_key: key, status }, 'Idempotency response cached');

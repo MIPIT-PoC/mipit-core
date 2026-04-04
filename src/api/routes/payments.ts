@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import type { ServerDeps } from '../server.js';
 import { createPaymentSchema } from '../schemas/payment-request.js';
-import { idempotencyMiddleware } from '../middleware/idempotency.js';
 import { NotFoundError } from '../../domain/errors/index.js';
 import { logger } from '../../observability/logger.js';
 import { z } from 'zod';
+import crypto from 'node:crypto';
+import { ulid } from 'ulid';
 
 const registerWebhookSchema = z.object({
   url: z.string().url('url must be a valid HTTP/HTTPS URL'),
@@ -14,22 +15,74 @@ const registerWebhookSchema = z.object({
 
 export async function paymentRoutes(app: FastifyInstance, deps: ServerDeps) {
   const { pipeline, paymentRepo, auditRepo, idempotencyRepo, webhookRepo } = deps;
-  const idempotencyHook = idempotencyMiddleware(idempotencyRepo);
 
   app.post(
     '/payments',
-    { preHandler: idempotencyHook },
     async (request, reply) => {
       const body = createPaymentSchema.parse(request.body);
       const traceId = (request as unknown as Record<string, unknown>).traceId as string;
-      const idempotencyKey = (request as unknown as Record<string, unknown>).idempotencyKey as string | undefined;
-      const requestHash = (request as unknown as Record<string, unknown>).requestHash as string | undefined;
+      const idempotencyKey = request.headers['idempotency-key'] as string | undefined;
 
-      const result = await pipeline.execute(body, {
-        idempotencyKey,
-        traceId,
-      });
+      if (idempotencyKey) {
+        const requestHash = crypto
+          .createHash('sha256')
+          .update(JSON.stringify(body))
+          .digest('hex');
 
+        // Check for existing record (cached or conflict)
+        const existing = await idempotencyRepo.findByKey(idempotencyKey);
+        if (existing) {
+          if (existing.request_hash !== requestHash) {
+            return reply.status(409).send({
+              code: 'IDEMPOTENCY_CONFLICT',
+              message: 'Idempotency-Key already used with a different payload',
+            });
+          }
+          // Return cached response (200 = idempotent replay)
+          return reply.status(existing.response_status ?? 200).send(
+            existing.response_body ?? { payment_id: existing.payment_id, status: 'QUEUED' },
+          );
+        }
+
+        // Atomically claim the idempotency key before running pipeline
+        const prePaymentId = `PMT-${ulid()}`;
+        const claimed = await idempotencyRepo.tryInsert({
+          idempotency_key: idempotencyKey,
+          payment_id: prePaymentId,
+          request_hash: requestHash,
+          created_at: new Date().toISOString(),
+        });
+
+        if (!claimed) {
+          // Another concurrent request claimed the key — return their result
+          const winner = await idempotencyRepo.findByKey(idempotencyKey);
+          return reply.status(winner?.response_status ?? 200).send(
+            winner?.response_body ?? { payment_id: winner?.payment_id, status: 'QUEUED' },
+          );
+        }
+
+        // We claimed the key — run pipeline with the pre-generated payment_id
+        const result = await pipeline.execute(body, {
+          idempotencyKey,
+          traceId,
+          paymentId: prePaymentId,
+        });
+
+        const responseBody = {
+          payment_id: result.payment_id,
+          status: result.status,
+          created_at: result.created_at,
+          destination_rail: result.destination_rail,
+        };
+
+        await idempotencyRepo.updateResponse(idempotencyKey, 201, responseBody);
+
+        logger.info({ payment_id: result.payment_id, trace_id: traceId }, 'Payment created successfully');
+        return reply.status(201).send(responseBody);
+      }
+
+      // No idempotency key — run pipeline directly
+      const result = await pipeline.execute(body, { traceId });
       const responseBody = {
         payment_id: result.payment_id,
         status: result.status,
@@ -37,22 +90,7 @@ export async function paymentRoutes(app: FastifyInstance, deps: ServerDeps) {
         destination_rail: result.destination_rail,
       };
 
-      if (idempotencyKey && requestHash) {
-        await idempotencyRepo.insert({
-          idempotency_key: idempotencyKey,
-          payment_id: result.payment_id,
-          request_hash: requestHash,
-          response_status: 201,
-          response_body: responseBody,
-          created_at: new Date().toISOString(),
-        });
-      }
-
-      logger.info(
-        { payment_id: result.payment_id, trace_id: traceId },
-        'Payment created successfully',
-      );
-
+      logger.info({ payment_id: result.payment_id, trace_id: traceId }, 'Payment created successfully');
       return reply.status(201).send(responseBody);
     },
   );

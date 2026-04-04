@@ -83,6 +83,23 @@ function applyValidation(value: unknown, validation: string): boolean {
   return true;
 }
 
+/** Native PIX SPI payload shape (as received from PIX rails or the /translate endpoint) */
+interface NativePixPayload {
+  endToEndId?: string;
+  valor?: { original?: string };
+  pagador?: {
+    ispb?: string;
+    nome?: string;
+    cpf?: string;
+    contaTransacional?: { numero?: string; tipoConta?: string };
+  };
+  recebedor?: { ispb?: string; nome?: string; cpf?: string };
+  chave?: string;
+  tipoChave?: string;
+  tipo?: string;
+  campoLivre?: string;
+}
+
 /**
  * Traduce un payload PIX al modelo canónico pacs.008 usando mappings desde DB
  */
@@ -92,9 +109,56 @@ export async function pixToCanonical(
   mappingLoader: MappingLoader,
   traceId?: string,
 ): Promise<CanonicalPacs008> {
-  const req = payload as CreatePaymentRequest;
   const now = new Date().toISOString();
   const log = logger.child({ payment_id: paymentId, rail: 'PIX' });
+
+  // Detect native PIX SPI format (from /translate endpoint or external adapters)
+  const maybeNative = payload as Record<string, unknown>;
+  if ('valor' in maybeNative || 'endToEndId' in maybeNative || 'pagador' in maybeNative) {
+    const native = payload as NativePixPayload;
+    const amount = parseFloat(native.valor?.original ?? '0');
+    const chave = native.chave ?? '';
+    const e2eId = native.endToEndId ?? `E2E-${ulid()}`;
+    const raw: Record<string, unknown> = {
+      payment_id: paymentId,
+      created_at: now,
+      grpHdr: { msgId: e2eId, creDtTm: now, nbOfTxs: 1 },
+      pmtId: { endToEndId: e2eId.slice(0, 35) },
+      amount: { value: amount, currency: 'BRL' },
+      fx: { source_currency: 'BRL' },
+      origin: { rail: 'PIX', ispb: native.pagador?.ispb },
+      destination: { rail: undefined, ispb: native.recebedor?.ispb },
+      debtor: {
+        name: native.pagador?.nome,
+        country: 'BR',
+        account_id: native.pagador?.contaTransacional?.numero ?? `acc-${paymentId}`,
+        taxId: native.pagador?.cpf,
+        accountType: native.pagador?.contaTransacional?.tipoConta ?? 'CACC',
+      },
+      creditor: {
+        name: native.recebedor?.nome,
+        country: 'BR',
+        account_id: chave ? `PIX-${chave}` : `PIX-recv-${paymentId}`,
+        taxId: native.recebedor?.cpf,
+      },
+      alias: { type: 'PIX_KEY', value: chave },
+      purpose: native.tipo ?? 'TRANSF',
+      reference: native.campoLivre ?? 'MIPIT-POC',
+      status: 'RECEIVED',
+      trace_id: traceId,
+    };
+    const result = canonicalPacs008Schema.safeParse(raw);
+    if (!result.success) {
+      log.error({ errors: result.error.flatten() }, 'Native PIX → Canonical validation failed');
+      throw new TranslationError('PIX', 'Invalid canonical output from native PIX translation', {
+        zodErrors: result.error.flatten().fieldErrors,
+      });
+    }
+    log.info('Native PIX → Canonical translation complete');
+    return result.data;
+  }
+
+  const req = payload as CreatePaymentRequest;
 
   try {
     // Cargar mappings dinámicos desde DB

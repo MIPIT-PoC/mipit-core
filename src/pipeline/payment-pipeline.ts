@@ -24,10 +24,10 @@ export class PaymentPipeline {
 
   async execute(
     request: CreatePaymentRequest,
-    context: { idempotencyKey?: string; traceId?: string },
+    context: { idempotencyKey?: string; traceId?: string; paymentId?: string },
   ) {
     const stopTotal = startLatencyTimer('pipeline_total');
-    const paymentId = `PMT-${ulid()}`;
+    const paymentId = context.paymentId ?? `PMT-${ulid()}`;
     const traceId = context.traceId ?? ulid();
     const now = new Date().toISOString();
     const log = this.logger.child({ payment_id: paymentId, trace_id: traceId });
