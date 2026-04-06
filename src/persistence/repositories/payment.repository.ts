@@ -211,4 +211,48 @@ export class PaymentRepository {
   async updateAck(paymentId: string, railAck: unknown, status: string): Promise<void> {
     await this.updateRailAck(paymentId, railAck, status);
   }
+
+  /**
+   * Find recent payments with optional status/rail filter (for UI list)
+   */
+  async findRecent(limit: number = 50, status?: string, rail?: string): Promise<PaymentIntent[]> {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let idx = 1;
+
+    if (status) { conditions.push(`status = $${idx++}`); params.push(status); }
+    if (rail) { conditions.push(`(origin_rail = $${idx} OR destination_rail = $${idx})`); params.push(rail); idx++; }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    params.push(limit);
+
+    const result = await this.db.query(
+      `SELECT * FROM payments ${where} ORDER BY created_at DESC LIMIT $${idx}`,
+      params,
+    );
+    return result.rows as PaymentIntent[];
+  }
+
+  /**
+   * Find payments by multiple statuses (for compensation batch processing)
+   */
+  async findByStatuses(statuses: string[], limit: number = 50): Promise<PaymentIntent[]> {
+    const placeholders = statuses.map((_, i) => `$${i + 1}`).join(', ');
+    const result = await this.db.query(
+      `SELECT * FROM payments WHERE status IN (${placeholders}) ORDER BY created_at ASC LIMIT $${statuses.length + 1}`,
+      [...statuses, limit],
+    );
+    return result.rows as PaymentIntent[];
+  }
+
+  /**
+   * Find all payments created since a given timestamp (for reconciliation)
+   */
+  async findSince(since: string): Promise<PaymentIntent[]> {
+    const result = await this.db.query(
+      'SELECT * FROM payments WHERE created_at >= $1 ORDER BY created_at DESC',
+      [since],
+    );
+    return result.rows as PaymentIntent[];
+  }
 }

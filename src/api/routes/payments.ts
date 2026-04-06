@@ -68,12 +68,7 @@ export async function paymentRoutes(app: FastifyInstance, deps: ServerDeps) {
           paymentId: prePaymentId,
         });
 
-        const responseBody = {
-          payment_id: result.payment_id,
-          status: result.status,
-          created_at: result.created_at,
-          destination_rail: result.destination_rail,
-        };
+        const responseBody = buildPaymentResponse(result);
 
         await idempotencyRepo.updateResponse(idempotencyKey, 201, responseBody);
 
@@ -83,15 +78,33 @@ export async function paymentRoutes(app: FastifyInstance, deps: ServerDeps) {
 
       // No idempotency key — run pipeline directly
       const result = await pipeline.execute(body, { traceId });
-      const responseBody = {
-        payment_id: result.payment_id,
-        status: result.status,
-        created_at: result.created_at,
-        destination_rail: result.destination_rail,
-      };
+      const responseBody = buildPaymentResponse(result);
 
       logger.info({ payment_id: result.payment_id, trace_id: traceId }, 'Payment created successfully');
       return reply.status(201).send(responseBody);
+    },
+  );
+
+  app.get(
+    '/payments',
+    async (request, reply) => {
+      const query = request.query as { status?: string; rail?: string; limit?: string };
+      const limit = Math.min(Number(query.limit) || 50, 200);
+      const payments = await paymentRepo.findRecent(limit, query.status, query.rail);
+      return reply.send(
+        payments.map((p) => ({
+          payment_id: p.payment_id,
+          status: p.status,
+          origin_rail: p.origin_rail,
+          destination_rail: p.destination_rail ?? null,
+          amount: p.amount,
+          currency: p.currency,
+          timestamps: {
+            created_at: p.created_at,
+            completed_at: p.completed_at ?? null,
+          },
+        })),
+      );
     },
   );
 
@@ -204,4 +217,24 @@ export async function paymentRoutes(app: FastifyInstance, deps: ServerDeps) {
       created_at: s.created_at,
     })));
   });
+}
+
+function buildPaymentResponse(result: Record<string, unknown>) {
+  const response: Record<string, unknown> = {
+    payment_id: result.payment_id,
+    status: result.status,
+    created_at: result.created_at,
+    origin_rail: result.origin_rail,
+    destination_rail: result.destination_rail,
+    route_rule_applied: result.route_rule_applied,
+    amount: result.amount,
+    currency: result.currency,
+    trace_id: result.trace_id,
+  };
+
+  if (result.fx) {
+    response.fx = result.fx;
+  }
+
+  return response;
 }

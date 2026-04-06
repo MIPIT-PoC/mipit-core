@@ -4,7 +4,6 @@ const sdk = initTelemetry();
 
 import { buildServer } from './api/server.js';
 import { connectDb } from './persistence/db.js';
-import { connectRabbitMQ } from './messaging/rabbitmq.js';
 import { env } from './config/env.js';
 import { logger } from './observability/logger.js';
 
@@ -22,12 +21,35 @@ import { RouteEngine } from './routing/route-engine.js';
 import { Publisher } from './messaging/publisher.js';
 import { PaymentPipeline } from './pipeline/payment-pipeline.js';
 import { AckConsumer } from './messaging/consumer.js';
+import { DlqHandler } from './messaging/dlq-handler.js';
 import { WebhookRepository } from './webhooks/webhook.repository.js';
 import { WebhookService } from './webhooks/webhook.service.js';
+import { FxService } from './fx/fx-service.js';
+import { CompensationService } from './compensation/compensation-service.js';
+import { ReconciliationService } from './reconciliation/reconciliation-service.js';
+import { RateLimiter } from './resilience/rate-limiter.js';
+import { RabbitMQReconnector } from './resilience/reconnect.js';
+import { EXCHANGES, QUEUES, ROUTING_KEYS } from './config/constants.js';
 
 async function main() {
   const db = await connectDb(env.DATABASE_URL);
-  const { connection, channel } = await connectRabbitMQ(env.RABBITMQ_URL);
+
+  // RabbitMQ with auto-reconnect
+  const reconnector = new RabbitMQReconnector(env.RABBITMQ_URL, {
+    baseMs: 1000,
+    maxMs: 30_000,
+    onReconnect: async (_conn, ch) => {
+      await setupRabbitMQTopology(ch);
+      logger.info('RabbitMQ topology re-established after reconnect');
+    },
+    onGiveUp: (err) => {
+      logger.fatal({ err }, 'RabbitMQ permanently lost — shutting down');
+      process.exit(1);
+    },
+  });
+
+  const { connection, channel } = await reconnector.connect();
+  await setupRabbitMQTopology(channel);
 
   const paymentRepo = new PaymentRepository(db);
   const auditRepo = new AuditRepository(db);
@@ -40,10 +62,15 @@ async function main() {
   const auditService = new AuditService(auditRepo);
   const mappingLoader = new MappingLoader(mappingRepo);
   const translator = new Translator(mappingLoader);
-  const normalizer = new Normalizer();
+  const fxService = new FxService(env.OPEN_EXCHANGE_RATES_APP_ID);
+  const normalizer = new Normalizer(fxService);
   const ruleLoader = new RuleLoader(routeRuleRepo);
   const routeEngine = new RouteEngine(ruleLoader);
   const publisher = new Publisher(channel);
+  const rateLimiter = new RateLimiter();
+
+  const compensationService = new CompensationService(paymentRepo, auditService);
+  const reconciliationService = new ReconciliationService(paymentRepo, auditService);
 
   const pipeline = new PaymentPipeline(
     translator,
@@ -67,17 +94,39 @@ async function main() {
     translator,
     mappingLoader,
     webhookRepo,
+    compensationService,
+    reconciliationService,
+    rateLimiter,
   });
 
+  // Start ACK consumer
   const ackConsumer = new AckConsumer(channel, paymentRepo, auditService, webhookService);
   await ackConsumer.start();
   logger.info('AckConsumer started and listening for ACK messages');
+
+  // Start DLQ handler
+  const dlqHandler = new DlqHandler(channel, paymentRepo, auditService);
+  await dlqHandler.start();
+  logger.info('DLQ handler started — processing dead-lettered payments');
+
+  // Start periodic reconciliation (every 30 minutes)
+  const reconInterval = setInterval(async () => {
+    try {
+      const report = await reconciliationService.runReconciliation({ windowHours: 1, stuckThresholdMinutes: 15 });
+      if (report.stuck_payments.length > 0 || report.anomalies.length > 0) {
+        logger.warn({ stuck: report.stuck_payments.length, anomalies: report.anomalies.length }, 'Reconciliation found issues');
+      }
+    } catch (err) {
+      logger.error({ err }, 'Periodic reconciliation failed');
+    }
+  }, 30 * 60_000);
 
   await app.listen({ port: env.PORT, host: '0.0.0.0' });
   logger.info(`mipit-core listening on port ${env.PORT}`);
 
   const shutdown = async () => {
     logger.info('Shutting down gracefully...');
+    clearInterval(reconInterval);
     await app.close();
     await channel.close();
     await connection.close();
@@ -89,6 +138,17 @@ async function main() {
 
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
+}
+
+async function setupRabbitMQTopology(channel: import('amqplib').Channel) {
+  await channel.assertExchange(EXCHANGES.PAYMENTS, 'topic', { durable: true });
+  await channel.assertExchange(EXCHANGES.DLX, 'topic', { durable: true });
+  await channel.assertQueue(QUEUES.ACK, { durable: true });
+  await channel.bindQueue(QUEUES.ACK, EXCHANGES.PAYMENTS, ROUTING_KEYS.ACK_PIX);
+  await channel.bindQueue(QUEUES.ACK, EXCHANGES.PAYMENTS, ROUTING_KEYS.ACK_SPEI);
+  await channel.bindQueue(QUEUES.ACK, EXCHANGES.PAYMENTS, ROUTING_KEYS.ACK_BREB);
+  await channel.assertQueue(QUEUES.DLQ, { durable: true });
+  await channel.bindQueue(QUEUES.DLQ, EXCHANGES.DLX, ROUTING_KEYS.DLQ);
 }
 
 main().catch((err) => {

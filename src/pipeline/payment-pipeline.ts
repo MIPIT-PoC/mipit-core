@@ -10,6 +10,7 @@ import type { PaymentRepository } from '../persistence/repositories/payment.repo
 import type { AuditService } from '../audit/audit-service.js';
 import type { Logger } from 'pino';
 import { startLatencyTimer } from '../observability/metrics.js';
+import { broadcastPaymentEvent } from '../api/routes/sse.js';
 
 export class PaymentPipeline {
   constructor(
@@ -139,6 +140,21 @@ export class PaymentPipeline {
       }, traceId);
       log.info('Step 7: Published to adapter queue with QUEUED status');
 
+      // Broadcast SSE event for real-time UI tracking
+      broadcastPaymentEvent({
+        payment_id: paymentId,
+        status: PAYMENT_STATUS.QUEUED,
+        origin_rail: originRail,
+        destination_rail: route.destination,
+        fx: normalized.fx ? {
+          source_currency: normalized.fx.source_currency,
+          target_currency: normalized.fx.target_currency,
+          rate: normalized.fx.rate,
+          converted_amount: normalized.fx.local_amount,
+        } : undefined,
+        timestamp: new Date().toISOString(),
+      });
+
       stopTotal();
       log.info({ destination: route.destination }, 'Pipeline completed successfully');
 
@@ -146,7 +162,18 @@ export class PaymentPipeline {
         payment_id: paymentId,
         status: PAYMENT_STATUS.QUEUED,
         created_at: now,
+        origin_rail: originRail,
         destination_rail: route.destination,
+        route_rule_applied: route.ruleName,
+        amount: request.amount,
+        currency: request.currency,
+        fx: normalized.fx ? {
+          source_currency: normalized.fx.source_currency,
+          target_currency: normalized.fx.target_currency,
+          rate: normalized.fx.rate,
+          converted_amount: normalized.fx.local_amount,
+        } : undefined,
+        trace_id: traceId,
       };
     } catch (err) {
       stopTotal();
@@ -169,10 +196,38 @@ export class PaymentPipeline {
     }
   }
 
+  /**
+   * Infers the origin payment rail from the debtor alias format.
+   * Supports both PoC prefixes (PIX-, SPEI-, BREB-) and real-world patterns:
+   *   PIX:   CPF (11 digits), CNPJ (14 digits), +55 phone, email, EVP (UUID v4)
+   *   SPEI:  CLABE (18 digits)
+   *   BRE_B: +57 phone, NIT format, BREB- prefix
+   */
   private inferRail(alias: string): string {
+    // PoC prefixes (fast path)
     if (alias.startsWith('PIX-')) return 'PIX';
     if (alias.startsWith('SPEI-')) return 'SPEI';
     if (alias.startsWith('BREB-')) return 'BRE_B';
-    throw new Error(`Cannot infer rail from alias: ${alias}`);
+
+    // PIX: CPF (11 digits)
+    if (/^\d{11}$/.test(alias)) return 'PIX';
+    // PIX: CNPJ (14 digits)
+    if (/^\d{14}$/.test(alias)) return 'PIX';
+    // PIX: Brazilian phone +55
+    if (/^\+55\d{10,11}$/.test(alias)) return 'PIX';
+    // PIX: EVP (UUID v4)
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(alias)) return 'PIX';
+    // PIX: email (generic — PIX keys can be email addresses)
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(alias) && !alias.startsWith('+57')) return 'PIX';
+
+    // SPEI: CLABE (18 digits with check digit)
+    if (/^\d{18}$/.test(alias)) return 'SPEI';
+
+    // BRE_B: Colombian phone +57
+    if (/^\+57\d{10}$/.test(alias)) return 'BRE_B';
+    // BRE_B: NIT (Colombian tax ID, 9-10 digits optionally with dash+check)
+    if (/^\d{9,10}(-\d)?$/.test(alias)) return 'BRE_B';
+
+    throw new Error(`Cannot infer rail from alias: ${alias}. Use a recognized format or prefix (PIX-, SPEI-, BREB-).`);
   }
 }

@@ -5,6 +5,7 @@ import type { AuditService } from '../audit/audit-service.js';
 import type { WebhookService } from '../webhooks/webhook.service.js';
 import { logger } from '../observability/logger.js';
 import { recordPayment } from '../observability/metrics.js';
+import { broadcastPaymentEvent } from '../api/routes/sse.js';
 
 interface PaymentAckMessage {
   payment_id: string;
@@ -85,6 +86,16 @@ export class AckConsumer {
         );
 
         recordPayment(finalStatus, ack.source_rail, ack.source_rail === 'PIX' ? 'SPEI' : 'PIX');
+
+        // Broadcast SSE event for real-time UI
+        broadcastPaymentEvent({
+          payment_id: ack.payment_id,
+          status: finalStatus,
+          origin_rail: ack.source_rail,
+          latency_ms: ack.latency_ms,
+          error: ack.rail_ack.error?.message,
+          timestamp: ack.processed_at,
+        });
 
         // Fire webhooks for terminal status (COMPLETED / FAILED / REJECTED)
         if (this.webhookService) {

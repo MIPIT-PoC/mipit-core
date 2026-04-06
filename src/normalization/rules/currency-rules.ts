@@ -1,4 +1,5 @@
 import type { CanonicalPacs008 } from '../../domain/models/canonical.js';
+import type { FxService } from '../../fx/fx-service.js';
 import { getFxService } from '../../fx/fx-service.js';
 import { logger } from '../../observability/logger.js';
 
@@ -17,17 +18,9 @@ const RAIL_LOCAL_CURRENCY: Record<string, string> = {
  * Normalizes currency and applies real-time FX conversion when the payment
  * crosses currency zones (e.g. PIX BRL → SPEI MXN, PIX BRL → BRE_B COP).
  *
- * Flow:
- *  1. Detect the local (native) currency of the origin rail
- *  2. If canonical.amount.currency != local currency → cross-currency
- *  3. Fetch real-time rate from Open Exchange Rates API (cached 5 min)
- *  4. Populate canonical.fx: { rate, source_currency, target_currency, local_amount }
- *  5. Target adapter uses fx.rate to convert the amount to local currency
- *
- * If OPEN_EXCHANGE_RATES_APP_ID is not set, falls back to hardcoded approximate rates.
- * If the API call fails, leaves canonical.fx empty (adapter receives amount as-is).
+ * Accepts an optional injected FxService for testability; falls back to singleton.
  */
-export async function normalizeCurrency(canonical: CanonicalPacs008): Promise<CanonicalPacs008> {
+export async function normalizeCurrency(canonical: CanonicalPacs008, injectedFxService?: FxService): Promise<CanonicalPacs008> {
   const uppercaseCurrency = canonical.amount.currency.toUpperCase();
   const localCurrency = RAIL_LOCAL_CURRENCY[canonical.origin.rail];
 
@@ -48,7 +41,7 @@ export async function normalizeCurrency(canonical: CanonicalPacs008): Promise<Ca
   );
 
   try {
-    const fxSvc = getFxService();
+    const fxSvc = injectedFxService ?? getFxService();
     // rate: how many units of localCurrency per 1 unit of payment currency
     const rate = await fxSvc.getRate(uppercaseCurrency, localCurrency);
     const localAmount = await fxSvc.convert(canonical.amount.value, uppercaseCurrency, localCurrency);

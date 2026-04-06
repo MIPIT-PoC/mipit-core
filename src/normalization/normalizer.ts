@@ -1,4 +1,5 @@
 import type { CanonicalPacs008 } from '../domain/models/canonical.js';
+import type { FxService } from '../fx/fx-service.js';
 import { normalizeDates } from './rules/date-rules.js';
 import { normalizeCurrency } from './rules/currency-rules.js';
 import { normalizeIds } from './rules/id-rules.js';
@@ -7,6 +8,8 @@ import { logger } from '../observability/logger.js';
 import { startLatencyTimer } from '../observability/metrics.js';
 
 export class Normalizer {
+  constructor(private readonly fxService?: FxService) {}
+
   async normalize(canonical: CanonicalPacs008): Promise<CanonicalPacs008> {
     const stopTimer = startLatencyTimer('normalization');
     const log = logger.child({ payment_id: canonical.payment_id, rail: canonical.origin.rail });
@@ -15,7 +18,7 @@ export class Normalizer {
     let result = { ...canonical };
 
     result = normalizeDates(result);
-    result = await normalizeCurrency(result);   // async: may call Open Exchange Rates API
+    result = await normalizeCurrency(result, this.fxService);
     result = normalizeIds(result);
     result = applyFallbacks(result);
 

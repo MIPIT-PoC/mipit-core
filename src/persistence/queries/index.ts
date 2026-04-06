@@ -13,13 +13,15 @@ export const SQL = {
 
   UPDATE_PAYMENT_STATUS_WITH_MILESTONE_TIMESTAMPS: `
     UPDATE payments SET
-      status       = $1,
-      validated_at   = CASE WHEN $1 = 'VALIDATED'           THEN NOW() ELSE validated_at END,
-      queued_at      = CASE WHEN $1 = 'QUEUED'              THEN NOW() ELSE queued_at END,
-      sent_at        = CASE WHEN $1 = 'SENT_TO_DESTINATION' THEN NOW() ELSE sent_at END,
-      completed_at   = CASE WHEN $1 = 'COMPLETED'           THEN NOW() ELSE completed_at END,
-      failed_at      = CASE WHEN $1 = 'FAILED'              THEN NOW() ELSE failed_at END,
-      updated_at     = NOW()
+      status           = $1,
+      validated_at     = CASE WHEN $1 = 'VALIDATED'           THEN NOW() ELSE validated_at END,
+      queued_at        = CASE WHEN $1 = 'QUEUED'              THEN NOW() ELSE queued_at END,
+      sent_at          = CASE WHEN $1 = 'SENT_TO_DESTINATION' THEN NOW() ELSE sent_at END,
+      completed_at     = CASE WHEN $1 = 'COMPLETED'           THEN NOW() ELSE completed_at END,
+      failed_at        = CASE WHEN $1 = 'FAILED'              THEN NOW() ELSE failed_at END,
+      compensated_at   = CASE WHEN $1 = 'COMPENSATED'         THEN NOW() ELSE compensated_at END,
+      dead_letter_at   = CASE WHEN $1 = 'DEAD_LETTER'         THEN NOW() ELSE dead_letter_at END,
+      updated_at       = NOW()
     WHERE payment_id = $2
     RETURNING *`,
 

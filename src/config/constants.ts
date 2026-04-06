@@ -2,6 +2,7 @@ export const PAYMENT_STATUS = {
   RECEIVED: 'RECEIVED',
   VALIDATED: 'VALIDATED',
   CANONICALIZED: 'CANONICALIZED',
+  NORMALIZED: 'NORMALIZED',
   ROUTED: 'ROUTED',
   QUEUED: 'QUEUED',
   SENT_TO_DESTINATION: 'SENT_TO_DESTINATION',
@@ -10,6 +11,9 @@ export const PAYMENT_STATUS = {
   FAILED: 'FAILED',
   REJECTED: 'REJECTED',
   DUPLICATE: 'DUPLICATE',
+  COMPENSATING: 'COMPENSATING',
+  COMPENSATED: 'COMPENSATED',
+  DEAD_LETTER: 'DEAD_LETTER',
 } as const;
 
 export type PaymentStatus = (typeof PAYMENT_STATUS)[keyof typeof PAYMENT_STATUS];
@@ -110,7 +114,10 @@ export const RAIL_METADATA: Record<Rail, {
   },
 };
 
-export const EXCHANGES = { PAYMENTS: 'mipit.payments' } as const;
+export const EXCHANGES = {
+  PAYMENTS: 'mipit.payments',
+  DLX: 'mipit.dlx',
+} as const;
 export const ROUTING_KEYS = {
   ROUTE_PIX:  'route.pix',
   ROUTE_SPEI: 'route.spei',
@@ -118,5 +125,30 @@ export const ROUTING_KEYS = {
   ACK_PIX:    'ack.pix',
   ACK_SPEI:   'ack.spei',
   ACK_BREB:   'ack.breb',
+  DLQ:        'dlq.#',
 } as const;
-export const QUEUES = { ACK: 'payments.ack' } as const;
+export const QUEUES = {
+  ACK: 'payments.ack',
+  DLQ: 'payments.dlq',
+} as const;
+
+/** Maximum retries before sending to DLQ */
+export const DLQ_MAX_RETRIES = 3;
+
+/** SPEI operating hours (CST = UTC-6) */
+export const RAIL_OPERATING_HOURS: Record<string, { days: number[]; startHhmm: number; endHhmm: number; tz: number }> = {
+  PIX:  { days: [1, 2, 3, 4, 5, 6], startHhmm: 700, endHhmm: 2359, tz: -3 },
+  SPEI: { days: [1, 2, 3, 4, 5], startHhmm: 700, endHhmm: 1730, tz: -6 },
+  BRE_B: { days: [1, 2, 3, 4, 5], startHhmm: 600, endHhmm: 2200, tz: -5 },
+};
+
+/** Rate limit configuration per rail (requests per minute) */
+export const RAIL_RATE_LIMITS: Record<string, { maxPerMinute: number; maxPerSecond: number }> = {
+  PIX:  { maxPerMinute: 600, maxPerSecond: 20 },
+  SPEI: { maxPerMinute: 300, maxPerSecond: 10 },
+  BRE_B: { maxPerMinute: 200, maxPerSecond: 8 },
+  SWIFT_MT103: { maxPerMinute: 100, maxPerSecond: 5 },
+  ISO20022_MX: { maxPerMinute: 100, maxPerSecond: 5 },
+  ACH_NACHA: { maxPerMinute: 100, maxPerSecond: 5 },
+  FEDNOW: { maxPerMinute: 300, maxPerSecond: 10 },
+};
