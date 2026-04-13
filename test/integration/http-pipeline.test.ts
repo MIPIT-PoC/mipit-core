@@ -102,6 +102,12 @@ async function buildTestServer() {
       auditRepo: mockAuditRepo as any,
       idempotencyRepo: mockIdempotencyRepo as any,
       auditService: mockAuditService as any,
+      translator: {} as any,
+      mappingLoader: {} as any,
+      webhookRepo: {} as any,
+      compensationService: {} as any,
+      reconciliationService: {} as any,
+      rateLimiter: {} as any,
     });
   });
 

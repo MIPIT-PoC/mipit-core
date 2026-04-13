@@ -14,7 +14,7 @@ import type { CanonicalPacs008 } from '../../../src/domain/models/canonical.js';
 const canonical: CanonicalPacs008 = {
   payment_id: 'PMT-ABCDEFGHIJ1234567890',
   created_at: '2025-06-15T12:00:00.000Z',
-  grpHdr: { msgId: 'MSG-001', creDtTm: '2025-06-15T12:00:00.000Z' },
+  grpHdr: { msgId: 'MSG-001', creDtTm: '2025-06-15T12:00:00.000Z', nbOfTxs: 1 },
   pmtId: { endToEndId: 'E2E-001' },
   amount: { value: 250.0, currency: 'BRL' },
   fx: { source_currency: 'BRL' },

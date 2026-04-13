@@ -204,7 +204,7 @@ describe('serializeAchNacha', () => {
     const lines = text.split('\n');
 
     // All lines must be exactly 94 chars
-    lines.forEach((line, idx) => {
+    lines.forEach((line) => {
       expect(line.length).toBe(94);
     });
 
