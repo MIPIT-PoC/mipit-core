@@ -18,13 +18,13 @@ let jwtToken: string | null = null;
 /**
  * Get JWT token from API
  */
-export async function getJWTToken(): Promise<string> {
+export async function getJWTToken(): Promise<string | null> {
   if (jwtToken) return jwtToken;
 
   const http = await import('http');
   const port = parseInt(process.env.PORT || '8080', 10);
 
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<string | null>((resolve) => {
     const options = {
       hostname: 'localhost',
       port,
@@ -50,22 +50,23 @@ export async function getJWTToken(): Promise<string> {
           if (res.statusCode === 200 && body.access_token) {
             jwtToken = body.access_token as string;
             resolve(jwtToken);
-          } else {
-            reject(new Error(`Cannot get JWT token: ${res.statusCode} ${data}`));
+            return;
           }
+
+          console.warn(`Auth token unavailable: ${res.statusCode} ${data}`);
+          resolve(null);
         } catch {
-          reject(new Error(`Cannot parse JWT response: ${data}`));
+          console.warn(`Auth token response could not be parsed: ${data}`);
+          resolve(null);
         }
       });
     });
 
-    req.on('error', (error) => {
-      reject(new Error(`Failed to get JWT token: ${error.message}`));
-    });
+    req.on('error', () => resolve(null));
 
     req.on('timeout', () => {
       req.destroy();
-      reject(new Error('JWT token request timeout'));
+      resolve(null);
     });
 
     req.write('{}');
@@ -78,8 +79,7 @@ export async function getJWTToken(): Promise<string> {
  */
 export async function setupDatabase(): Promise<Pool> {
   const connectionString =
-    process.env.DATABASE_URL ||
-    'postgresql://postgres:postgres@localhost:5432/mipit_test';
+    process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/mipit_test';
 
   dbPool = new Pool({
     connectionString,
@@ -133,11 +133,31 @@ export async function cleanupDatabase(testTag: string): Promise<void> {
   if (!dbPool) return;
 
   try {
+    const referencePattern = `%e2e-test-${testTag}-%`;
+    const tracePattern = `e2e-test-${testTag}-%`;
+
     await dbPool.query(
-      `DELETE FROM payments 
-       WHERE reference LIKE $1 
-          OR trace_id LIKE $2`,
-      [`%e2e-test-${testTag}-%`, `e2e-test-${testTag}-%`]
+      `
+      DELETE FROM audit_events
+      WHERE payment_id IN (
+        SELECT payment_id
+        FROM payments
+        WHERE reference LIKE $1
+           OR trace_id LIKE $2
+           OR purpose LIKE $3
+      )
+      `,
+      [referencePattern, tracePattern, `%${testTag}%`],
+    );
+
+    await dbPool.query(
+      `
+      DELETE FROM payments
+      WHERE reference LIKE $1
+         OR trace_id LIKE $2
+         OR purpose LIKE $3
+      `,
+      [referencePattern, tracePattern, `%${testTag}%`],
     );
 
     console.log(`✓ Cleaned up test payments for: ${testTag}`);
@@ -178,11 +198,17 @@ export async function teardown(): Promise<void> {
 /**
  * Make HTTP request to API using built-in http module
  */
-export async function makePaymentRequest(
-  payload: any
-): Promise<{ status: number; body: any }> {
+export async function makePaymentRequest(payload: any): Promise<{ status: number; body: any }> {
   const http = await import('http');
   const token = await getJWTToken();
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
   const port = parseInt(process.env.PORT || '8080', 10);
 
   return new Promise((resolve, reject) => {
@@ -191,10 +217,7 @@ export async function makePaymentRequest(
       port,
       path: '/payments',
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers,
       timeout: 10000,
     };
 
@@ -238,7 +261,7 @@ export async function makePaymentRequest(
 export async function waitForMessage(
   queueName: string,
   timeoutMs: number = 5000,
-  predicate?: (msg: any) => boolean
+  predicate?: (msg: any) => boolean,
 ): Promise<any> {
   if (!rmqChannel) {
     throw new Error('RabbitMQ not initialized');
@@ -275,7 +298,7 @@ export async function waitForMessage(
           reject(error);
         }
       },
-      { noAck: false }
+      { noAck: false },
     );
   });
 }
@@ -283,19 +306,18 @@ export async function waitForMessage(
 /**
  * Assert payment status in database
  */
-export async function assertPaymentStatus(
-  paymentId: string,
-  expectedStatus: string
-): Promise<any> {
+export async function assertPaymentStatus(paymentId: string, expectedStatus: string): Promise<any> {
   if (!dbPool) {
     throw new Error('Database not initialized');
   }
 
   const result = await dbPool.query(
-    `SELECT payment_id, status, amount, currency, trace_id, created_at
-     FROM payments
-     WHERE payment_id = $1`,
-    [paymentId]
+    `
+    SELECT *
+    FROM payments
+    WHERE payment_id = $1
+    `,
+    [paymentId],
   );
 
   if (result.rows.length === 0) {
@@ -305,9 +327,7 @@ export async function assertPaymentStatus(
   const payment = result.rows[0];
 
   if (payment.status !== expectedStatus) {
-    throw new Error(
-      `Payment status mismatch. Expected: ${expectedStatus}, Got: ${payment.status}`
-    );
+    throw new Error(`Payment status mismatch. Expected: ${expectedStatus}, Got: ${payment.status}`);
   }
 
   return payment;
@@ -316,9 +336,7 @@ export async function assertPaymentStatus(
 /**
  * Create test payment request
  */
-export function createTestPayment(
-  scenario: 'pix' | 'spei' | 'crossrail'
-): any {
+export function createTestPayment(scenario: 'pix' | 'spei' | 'crossrail'): any {
   const traceId = `e2e-test-${scenario}-${Date.now()}`;
 
   switch (scenario) {
@@ -363,7 +381,7 @@ export function createTestPayment(
           name: 'Test Debtor BR-MX',
         },
         creditor: {
-          alias: 'SPEI-032180000118359719',         
+          alias: 'SPEI-032180000118359719',
           name: 'Test Creditor BR-MX',
         },
         purpose: 'test-crossrail-happy-path',
@@ -387,3 +405,176 @@ export async function query(sql: string, params?: any[]): Promise<any> {
 }
 
 export { dbPool, rmqConnection, rmqChannel };
+/**
+ * Helper: Force PIX mock to reject the next payment
+ */
+export async function forcePixRejectNext(): Promise<void> {
+  const pixUrl = process.env.PIX_SPI_URL || 'http://localhost:8001';
+  const res = await fetch(`${pixUrl}/admin/reject-next`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to force PIX rejection: ${res.statusText}`);
+}
+
+/**
+ * Helper: Force PIX mock to timeout the next payment
+ */
+export async function forcePixTimeoutNext(): Promise<void> {
+  const pixUrl = process.env.PIX_SPI_URL || 'http://localhost:8001';
+  const res = await fetch(`${pixUrl}/admin/timeout-next`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to force PIX timeout: ${res.statusText}`);
+}
+
+/**
+ * Helper: Force SPEI mock to reject the next payment
+ */
+export async function forceSpeiRejectNext(): Promise<void> {
+  const speiUrl = process.env.SPEI_CECOBAN_URL || 'http://localhost:8002';
+  const res = await fetch(`${speiUrl}/admin/reject-next`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to force SPEI rejection: ${res.statusText}`);
+}
+
+/**
+ * Helper: Force SPEI mock to timeout the next payment
+ */
+export async function forceSpeiTimeoutNext(): Promise<void> {
+  const speiUrl = process.env.SPEI_CECOBAN_URL || 'http://localhost:8002';
+  const res = await fetch(`${speiUrl}/admin/timeout-next`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to force SPEI timeout: ${res.statusText}`);
+}
+
+/**
+ * Helper: Reset mock configuration
+ */
+export async function resetMockConfig(rail: 'PIX' | 'SPEI'): Promise<void> {
+  const url =
+    rail === 'PIX'
+      ? `${process.env.PIX_SPI_URL || 'http://localhost:8001'}/admin/reset`
+      : `${process.env.SPEI_CECOBAN_URL || 'http://localhost:8002'}/admin/reset`;
+  const res = await fetch(url, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to reset ${rail} mock: ${res.statusText}`);
+}
+
+/**
+ * Helper: Wait for payment status to eventually reach expected value
+ */
+export async function waitForPaymentStatus(
+  paymentId: string,
+  expectedStatus: string,
+  maxWaitMs: number = 15000,
+): Promise<any> {
+  if (!dbPool) throw new Error('Database not initialized');
+
+  const startTime = Date.now();
+  while (Date.now() - startTime < maxWaitMs) {
+    const result = await dbPool.query(`SELECT * FROM payments WHERE payment_id = $1`, [paymentId]);
+
+    if (result.rows.length > 0 && result.rows[0].status === expectedStatus) {
+      return result.rows[0];
+    }
+
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  throw new Error(`Timeout waiting for payment ${paymentId} to reach status ${expectedStatus}`);
+}
+
+/**
+ * Helper: Get audit events for a payment
+ */
+export async function getAuditEvents(paymentId: string): Promise<any[]> {
+  if (!dbPool) throw new Error('Database not initialized');
+
+  const result = await dbPool.query(
+    `SELECT * FROM audit_events WHERE payment_id = $1 ORDER BY created_at ASC`,
+    [paymentId],
+  );
+
+  return result.rows;
+}
+
+/**
+ * Helper: Get full payment details
+ */
+export async function getPaymentDetails(paymentId: string): Promise<any> {
+  if (!dbPool) throw new Error('Database not initialized');
+
+  const result = await dbPool.query(`SELECT * FROM payments WHERE payment_id = $1`, [paymentId]);
+
+  if (result.rows.length === 0) throw new Error(`Payment not found: ${paymentId}`);
+  return result.rows[0];
+}
+
+/**
+ * Helper: Make payment request with custom idempotency key
+ */
+export async function makePaymentRequestWithIdempotency(
+  payload: any,
+  idempotencyKey: string,
+): Promise<{ status: number; body: any }> {
+  const http = await import('http');
+  const token = await getJWTToken();
+  const port = parseInt(process.env.PORT || '8080', 10);
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Idempotency-Key': idempotencyKey,
+  };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: 'localhost',
+        port,
+        path: '/payments',
+        method: 'POST',
+        headers,
+        timeout: 10000,
+      },
+      (res) => {
+        let data = '';
+
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+
+        res.on('end', () => {
+          try {
+            resolve({
+              status: res.statusCode || 500,
+              body: JSON.parse(data),
+            });
+          } catch {
+            resolve({
+              status: res.statusCode || 500,
+              body: { error: data },
+            });
+          }
+        });
+      },
+    );
+
+    req.on('error', (error) => {
+      reject(new Error(`HTTP request failed: ${error.message}`));
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('HTTP request timeout'));
+    });
+
+    req.write(JSON.stringify(payload));
+    req.end();
+  });
+}
+
+/**
+ * Helper: Check if payment exists
+ */
+export async function paymentExists(paymentId: string): Promise<boolean> {
+  if (!dbPool) return false;
+  const result = await dbPool.query(`SELECT 1 FROM payments WHERE payment_id = $1`, [paymentId]);
+  return result.rows.length > 0;
+}
