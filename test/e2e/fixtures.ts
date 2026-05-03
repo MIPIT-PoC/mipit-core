@@ -3,11 +3,11 @@ import * as amqp from 'amqplib';
 
 /**
  * Shared E2E Test Fixtures
- * 
+ *
  * These fixtures set up real integration with:
- * - PostgreSQL (persistence)
- * - RabbitMQ (messaging)
- * - HTTP API (routing)
+ * - PostgreSQL persistence
+ * - RabbitMQ messaging
+ * - HTTP API routing
  */
 
 let dbPool: Pool;
@@ -19,14 +19,15 @@ let jwtToken: string | null = null;
  * Get JWT token from API
  */
 export async function getJWTToken(): Promise<string> {
-  if (jwtToken) return jwtToken; // Cache token
-  
+  if (jwtToken) return jwtToken;
+
   const http = await import('http');
-  
+  const port = parseInt(process.env.PORT || '8080', 10);
+
   return new Promise<string>((resolve, reject) => {
     const options = {
       hostname: 'localhost',
-      port: 3000,
+      port,
       path: '/auth/token',
       method: 'POST',
       headers: {
@@ -37,17 +38,22 @@ export async function getJWTToken(): Promise<string> {
 
     const req = http.request(options, (res) => {
       let data = '';
-      res.on('data', (chunk) => { data += chunk; });
+
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
       res.on('end', () => {
         try {
           const body = JSON.parse(data);
+
           if (res.statusCode === 200 && body.access_token) {
             jwtToken = body.access_token as string;
             resolve(jwtToken);
           } else {
             reject(new Error(`Cannot get JWT token: ${res.statusCode} ${data}`));
           }
-        } catch (e) {
+        } catch {
           reject(new Error(`Cannot parse JWT response: ${data}`));
         }
       });
@@ -71,8 +77,10 @@ export async function getJWTToken(): Promise<string> {
  * Initialize database connection
  */
 export async function setupDatabase(): Promise<Pool> {
-  const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/mipit_test';
-  
+  const connectionString =
+    process.env.DATABASE_URL ||
+    'postgresql://postgres:postgres@localhost:5432/mipit_test';
+
   dbPool = new Pool({
     connectionString,
     max: 5,
@@ -80,7 +88,6 @@ export async function setupDatabase(): Promise<Pool> {
     connectionTimeoutMillis: 2000,
   });
 
-  // Test connection
   try {
     const client = await dbPool.connect();
     await client.query('SELECT NOW()');
@@ -96,36 +103,43 @@ export async function setupDatabase(): Promise<Pool> {
 /**
  * Initialize RabbitMQ connection
  */
-export async function setupRabbitMQ(): Promise<{ connection: amqp.Connection; channel: amqp.Channel }> {
+export async function setupRabbitMQ(): Promise<{
+  connection: amqp.Connection;
+  channel: amqp.Channel;
+}> {
   const rmqUrl = process.env.RABBITMQ_URL || 'amqp://guest:guest@localhost:5672';
 
   try {
     rmqConnection = (await amqp.connect(rmqUrl)) as unknown as amqp.Connection;
     rmqChannel = (await (rmqConnection as any).createChannel()) as unknown as amqp.Channel;
-    
-    // Declare queues
+
     await rmqChannel.assertQueue('payment-acks', { durable: true });
-    
+
     console.log('✓ RabbitMQ connected');
   } catch (error) {
     throw new Error(`Cannot connect to RabbitMQ: ${error}`);
   }
 
-  return { connection: rmqConnection as amqp.Connection, channel: rmqChannel as amqp.Channel };
+  return {
+    connection: rmqConnection as amqp.Connection,
+    channel: rmqChannel as amqp.Channel,
+  };
 }
 
 /**
- * Clean up database (remove test payments)
+ * Clean up database remove test payments
  */
 export async function cleanupDatabase(testTag: string): Promise<void> {
   if (!dbPool) return;
-  
+
   try {
-    // Delete test payments by trace ID pattern
     await dbPool.query(
-      `DELETE FROM payments WHERE trace_id LIKE $1`,
-      [`e2e-test-${testTag}-%`]
+      `DELETE FROM payments 
+       WHERE reference LIKE $1 
+          OR trace_id LIKE $2`,
+      [`%e2e-test-${testTag}-%`, `e2e-test-${testTag}-%`]
     );
+
     console.log(`✓ Cleaned up test payments for: ${testTag}`);
   } catch (error) {
     console.warn(`Warning: Could not cleanup database: ${error}`);
@@ -137,45 +151,69 @@ export async function cleanupDatabase(testTag: string): Promise<void> {
  */
 export async function teardown(): Promise<void> {
   if (rmqChannel) {
-    try { await rmqChannel.close(); } catch (e) { /* ignore */ }
+    try {
+      await rmqChannel.close();
+    } catch {
+      // ignore
+    }
   }
+
   if (rmqConnection) {
-    try { await (rmqConnection as any).close(); } catch (e) { /* ignore */ }
+    try {
+      await (rmqConnection as any).close();
+    } catch {
+      // ignore
+    }
   }
+
   if (dbPool) {
-    try { await dbPool.end(); } catch (e) { /* ignore */ }
+    try {
+      await dbPool.end();
+    } catch {
+      // ignore
+    }
   }
 }
 
 /**
  * Make HTTP request to API using built-in http module
  */
-export async function makePaymentRequest(payload: any): Promise<{ status: number; body: any }> {
+export async function makePaymentRequest(
+  payload: any
+): Promise<{ status: number; body: any }> {
   const http = await import('http');
   const token = await getJWTToken();
-  
+  const port = parseInt(process.env.PORT || '8080', 10);
+
   return new Promise((resolve, reject) => {
     const options = {
       hostname: 'localhost',
-      port: 3000,
+      port,
       path: '/payments',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
       },
       timeout: 10000,
     };
 
     const req = http.request(options, (res) => {
       let data = '';
-      res.on('data', (chunk) => { data += chunk; });
+
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
       res.on('end', () => {
         try {
           const body = JSON.parse(data);
           resolve({ status: res.statusCode || 500, body });
-        } catch (e) {
-          resolve({ status: res.statusCode || 500, body: { error: data } });
+        } catch {
+          resolve({
+            status: res.statusCode || 500,
+            body: { error: data },
+          });
         }
       });
     });
@@ -214,27 +252,31 @@ export async function waitForMessage(
       if (messages.length > 0) {
         rmqChannel!.nack(messages[messages.length - 1], false);
       }
+
       reject(new Error(`No message received in ${timeoutMs}ms`));
     }, timeoutMs);
 
-    rmqChannel!.consume(queueName, async (msg) => {
-      if (!msg) return;
+    rmqChannel!.consume(
+      queueName,
+      async (msg) => {
+        if (!msg) return;
 
-      try {
-        const content = JSON.parse(msg.content.toString());
-        messages.push(msg);
+        try {
+          const content = JSON.parse(msg.content.toString());
+          messages.push(msg);
 
-        // Check predicate if provided
-        if (!predicate || predicate(content)) {
-          clearTimeout(timeout);
-          await rmqChannel!.ack(msg);
-          resolve(content);
+          if (!predicate || predicate(content)) {
+            clearTimeout(timeout);
+            await rmqChannel!.ack(msg);
+            resolve(content);
+          }
+        } catch (error) {
+          await rmqChannel!.nack(msg, true);
+          reject(error);
         }
-      } catch (error) {
-        await rmqChannel!.nack(msg, true);
-        reject(error);
-      }
-    }, { noAck: false });
+      },
+      { noAck: false }
+    );
   });
 }
 
@@ -250,7 +292,9 @@ export async function assertPaymentStatus(
   }
 
   const result = await dbPool.query(
-    `SELECT id, status, amount, trace_id, created_at FROM payments WHERE id = $1`,
+    `SELECT payment_id, status, amount, currency, trace_id, created_at
+     FROM payments
+     WHERE payment_id = $1`,
     [paymentId]
   );
 
@@ -259,6 +303,7 @@ export async function assertPaymentStatus(
   }
 
   const payment = result.rows[0];
+
   if (payment.status !== expectedStatus) {
     throw new Error(
       `Payment status mismatch. Expected: ${expectedStatus}, Got: ${payment.status}`
@@ -271,13 +316,15 @@ export async function assertPaymentStatus(
 /**
  * Create test payment request
  */
-export function createTestPayment(scenario: 'pix' | 'spei' | 'crossrail'): any {
+export function createTestPayment(
+  scenario: 'pix' | 'spei' | 'crossrail'
+): any {
   const traceId = `e2e-test-${scenario}-${Date.now()}`;
 
   switch (scenario) {
     case 'pix':
       return {
-        amount: 100,  // Number, not string
+        amount: 100,
         currency: 'BRL',
         debtor: {
           alias: 'PIX-test-debtor-001',
@@ -293,14 +340,14 @@ export function createTestPayment(scenario: 'pix' | 'spei' | 'crossrail'): any {
 
     case 'spei':
       return {
-        amount: 500,  // Number, not string
+        amount: 500,
         currency: 'MXN',
         debtor: {
-          alias: 'SPEI-012345678901234567',  // Valid 18-digit CLABE
+          alias: 'SPEI-032180000118359719',
           name: 'Test Debtor MX',
         },
         creditor: {
-          alias: 'SPEI-109876543210987654',  // Valid 18-digit CLABE
+          alias: 'SPEI-032180000118359719',
           name: 'Test Creditor MX',
         },
         purpose: 'test-spei-happy-path',
@@ -309,14 +356,14 @@ export function createTestPayment(scenario: 'pix' | 'spei' | 'crossrail'): any {
 
     case 'crossrail':
       return {
-        amount: 50,  // Number, not string
+        amount: 50,
         currency: 'BRL',
         debtor: {
           alias: 'PIX-test-debtor-002',
           name: 'Test Debtor BR-MX',
         },
         creditor: {
-          alias: 'SPEI-012345678901234567',
+          alias: 'SPEI-032180000118359719',         
           name: 'Test Creditor BR-MX',
         },
         purpose: 'test-crossrail-happy-path',
@@ -335,6 +382,7 @@ export async function query(sql: string, params?: any[]): Promise<any> {
   if (!dbPool) {
     throw new Error('Database not initialized');
   }
+
   return dbPool.query(sql, params);
 }
 
