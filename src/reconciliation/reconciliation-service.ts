@@ -70,7 +70,7 @@ const DEFAULT_OPTIONS: ReconciliationOptions = {
 export class ReconciliationService {
   constructor(
     private readonly paymentRepo: PaymentRepository,
-    private readonly auditService: AuditService,
+    _auditService: AuditService,
   ) {}
 
   async runReconciliation(options?: Partial<ReconciliationOptions>): Promise<ReconciliationReport> {

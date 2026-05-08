@@ -57,7 +57,15 @@ export async function buildServer(deps: ServerDeps) {
   await app.register(fastifyJwt, { secret: deps.jwtSecret });
 
   // Security: HTTP rate limiting (before auth)
-  registerRateLimitMiddleware(app, { maxRequests: 200, windowMs: 60_000 });
+  // Configurable via HTTP_RATE_LIMIT_MAX / HTTP_RATE_LIMIT_WINDOW_MS so the
+  // E2E + load suites can run higher volumes without colliding with the
+  // production default. Production env files keep the default (200/60s).
+  const httpRateLimitMax = Number(process.env.HTTP_RATE_LIMIT_MAX ?? '200');
+  const httpRateLimitWindowMs = Number(process.env.HTTP_RATE_LIMIT_WINDOW_MS ?? '60000');
+  registerRateLimitMiddleware(app, {
+    maxRequests: httpRateLimitMax,
+    windowMs: httpRateLimitWindowMs,
+  });
 
   // Security: Input sanitization
   registerSanitizationMiddleware(app);

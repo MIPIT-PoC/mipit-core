@@ -358,15 +358,17 @@ export function createTestPayment(scenario: 'pix' | 'spei' | 'crossrail'): any {
 
   switch (scenario) {
     case 'pix':
+      // Realistic PIX keys are required so the BACEN SPI mock does not reject
+      // the payload at the DICT chave validator (CPF/CNPJ/EMAIL/PHONE/EVP).
       return {
         amount: 100,
         currency: 'BRL',
         debtor: {
-          alias: 'PIX-test-debtor-001',
+          alias: 'PIX-test-debtor@mipit.test',
           name: 'Test Debtor BR',
         },
         creditor: {
-          alias: 'PIX-test-creditor-001',
+          alias: 'PIX-test-creditor@mipit.test',
           name: 'Test Creditor BR',
         },
         purpose: 'test-pix-happy-path',
@@ -394,7 +396,7 @@ export function createTestPayment(scenario: 'pix' | 'spei' | 'crossrail'): any {
         amount: 50,
         currency: 'BRL',
         debtor: {
-          alias: 'PIX-test-debtor-002',
+          alias: 'PIX-test-cross@mipit.test',
           name: 'Test Debtor BR-MX',
         },
         creditor: {
