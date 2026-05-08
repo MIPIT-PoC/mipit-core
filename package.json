@@ -14,7 +14,9 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:e2e": "jest test/e2e --forceExit --detectOpenHandles",
-    "test:e2e:happy-path": "jest test/e2e/happy-path*.test.ts --forceExit --detectOpenHandles"
+    "test:e2e:happy-path": "jest test/e2e/happy-path*.test.ts --forceExit --detectOpenHandles",
+    "validate:core": "tsx test/validation/run-core-validation.ts",
+    "validate:core:consolidate": "tsx test/validation/consolidate-core-validation.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.0",

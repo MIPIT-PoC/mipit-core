@@ -1,5 +1,7 @@
 import { Pool } from 'pg';
 import * as amqp from 'amqplib';
+import { config as loadEnv } from 'dotenv';
+import path from 'path';
 
 /**
  * Shared E2E Test Fixtures
@@ -10,10 +12,37 @@ import * as amqp from 'amqplib';
  * - HTTP API routing
  */
 
+loadEnv({ path: path.resolve(__dirname, '.env.test') });
+
 let dbPool: Pool;
 let rmqConnection: amqp.Connection | null = null;
 let rmqChannel: amqp.Channel | null = null;
 let jwtToken: string | null = null;
+
+const API_PROTOCOL = process.env.API_PROTOCOL || 'http';
+const API_HOST = process.env.API_HOST || 'localhost';
+const API_PORT = parseInt(process.env.PORT || (API_PROTOCOL === 'https' ? '443' : '8080'), 10);
+
+async function getApiTransport() {
+  return API_PROTOCOL === 'https' ? import('https') : import('http');
+}
+
+function buildApiRequestOptions(
+  pathName: string,
+  method: string,
+  headers: Record<string, string>,
+  timeout: number,
+) {
+  return {
+    hostname: API_HOST,
+    port: API_PORT,
+    path: pathName,
+    method,
+    headers,
+    timeout,
+    ...(API_PROTOCOL === 'https' ? { rejectUnauthorized: false } : {}),
+  };
+}
 
 /**
  * Get JWT token from API
@@ -21,22 +50,19 @@ let jwtToken: string | null = null;
 export async function getJWTToken(): Promise<string | null> {
   if (jwtToken) return jwtToken;
 
-  const http = await import('http');
-  const port = parseInt(process.env.PORT || '8080', 10);
+  const transport = await getApiTransport();
 
   return new Promise<string | null>((resolve) => {
-    const options = {
-      hostname: 'localhost',
-      port,
-      path: '/auth/token',
-      method: 'POST',
-      headers: {
+    const options = buildApiRequestOptions(
+      '/auth/token',
+      'POST',
+      {
         'Content-Type': 'application/json',
       },
-      timeout: 5000,
-    };
+      5000,
+    );
 
-    const req = http.request(options, (res) => {
+    const req = transport.request(options, (res) => {
       let data = '';
 
       res.on('data', (chunk) => {
@@ -79,7 +105,7 @@ export async function getJWTToken(): Promise<string | null> {
  */
 export async function setupDatabase(): Promise<Pool> {
   const connectionString =
-    process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/mipit_test';
+    process.env.DATABASE_URL || 'postgresql://mipit:mipit_secret@localhost:5432/mipit_test';
 
   dbPool = new Pool({
     connectionString,
@@ -107,7 +133,7 @@ export async function setupRabbitMQ(): Promise<{
   connection: amqp.Connection;
   channel: amqp.Channel;
 }> {
-  const rmqUrl = process.env.RABBITMQ_URL || 'amqp://guest:guest@localhost:5672';
+  const rmqUrl = process.env.RABBITMQ_URL || 'amqp://mipit:mipit_secret@localhost:5672/mipit';
 
   try {
     rmqConnection = (await amqp.connect(rmqUrl)) as unknown as amqp.Connection;
@@ -199,7 +225,7 @@ export async function teardown(): Promise<void> {
  * Make HTTP request to API using built-in http module
  */
 export async function makePaymentRequest(payload: any): Promise<{ status: number; body: any }> {
-  const http = await import('http');
+  const transport = await getApiTransport();
   const token = await getJWTToken();
 
   const headers: Record<string, string> = {
@@ -209,19 +235,10 @@ export async function makePaymentRequest(payload: any): Promise<{ status: number
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
-  const port = parseInt(process.env.PORT || '8080', 10);
-
   return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'localhost',
-      port,
-      path: '/payments',
-      method: 'POST',
-      headers,
-      timeout: 10000,
-    };
+    const options = buildApiRequestOptions('/payments', 'POST', headers, 10000);
 
-    const req = http.request(options, (res) => {
+    const req = transport.request(options, (res) => {
       let data = '';
 
       res.on('data', (chunk) => {
@@ -510,9 +527,8 @@ export async function makePaymentRequestWithIdempotency(
   payload: any,
   idempotencyKey: string,
 ): Promise<{ status: number; body: any }> {
-  const http = await import('http');
+  const transport = await getApiTransport();
   const token = await getJWTToken();
-  const port = parseInt(process.env.PORT || '8080', 10);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -524,15 +540,8 @@ export async function makePaymentRequestWithIdempotency(
   }
 
   return new Promise((resolve, reject) => {
-    const req = http.request(
-      {
-        hostname: 'localhost',
-        port,
-        path: '/payments',
-        method: 'POST',
-        headers,
-        timeout: 10000,
-      },
+    const req = transport.request(
+      buildApiRequestOptions('/payments', 'POST', headers, 10000),
       (res) => {
         let data = '';
 

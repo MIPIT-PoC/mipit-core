@@ -3,6 +3,7 @@ dist/
 .env
 *.log
 coverage/
+test/validation/results/
 .DS_Store
 Thumbs.db
 *.tsbuildinfo
