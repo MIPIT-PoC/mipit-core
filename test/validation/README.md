@@ -43,6 +43,15 @@ El script genera dos artefactos en `test/validation/results/`:
 
 - `core-validation-<timestamp>.json`
 - `core-validation-<timestamp>.md`
+- `core-validation-trace-<timestamp>.log`
+
+La traza `.log` deja evidencia detallada de:
+
+- cada request y response HTTP
+- payloads enviados y cuerpos recibidos
+- polling de estados asincronos
+- pasos de DB, RabbitMQ y mocks
+- inicio, fin y error de cada check
 
 ## Consolidacion
 

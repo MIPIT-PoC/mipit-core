@@ -1,4 +1,5 @@
 import { config as loadEnv } from 'dotenv';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Pool } from 'pg';
@@ -81,12 +82,56 @@ const config = {
 };
 
 const baseUrl = `${config.protocol}://${config.host}:${config.port}`;
+const traceStamp = new Date().toISOString().replace(/[:.]/g, '-');
+const tracePath = path.join(config.outputDir, `core-validation-trace-${traceStamp}.log`);
 
 if (config.protocol === 'https' && config.allowInvalidCerts) {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 }
 
 let authToken: string | null = null;
+
+function isSensitiveKey(key: string): boolean {
+  return /(authorization|token|secret|password|jwt)/i.test(key);
+}
+
+function sanitizeForLogs(value: unknown): unknown {
+  if (value == null) return value;
+  if (Array.isArray(value)) return value.map((item) => sanitizeForLogs(item));
+  if (typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, innerValue]) => [
+        key,
+        isSensitiveKey(key) ? '[REDACTED]' : sanitizeForLogs(innerValue),
+      ]),
+    );
+  }
+  if (typeof value === 'string' && value.startsWith('Bearer ')) {
+    return 'Bearer [REDACTED]';
+  }
+  return value;
+}
+
+async function ensureTraceDir() {
+  await fs.mkdir(config.outputDir, { recursive: true });
+}
+
+function writeTrace(prefix: string, payload?: unknown) {
+  const header = `[${new Date().toISOString()}] ${prefix}`;
+  console.log(header);
+  fsSync.appendFileSync(tracePath, `${header}\n`, 'utf8');
+  if (payload !== undefined) {
+    const serialized =
+      typeof payload === 'string'
+        ? payload
+        : JSON.stringify(sanitizeForLogs(payload), null, 2);
+    for (const line of serialized.split(/\r?\n/)) {
+      const entry = `[${new Date().toISOString()}] ${line}`;
+      console.log(entry);
+      fsSync.appendFileSync(tracePath, `${entry}\n`, 'utf8');
+    }
+  }
+}
 
 function uniqueSuffix(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -105,6 +150,20 @@ async function insecureFetch<T>(
   init?: RequestInit,
   expectJson: boolean = true,
 ): Promise<{ status: number; headers: Headers; body: T }> {
+  writeTrace(`REQUEST ${init?.method ?? 'GET'} ${baseUrl}${pathName}`, {
+    headers: init?.headers,
+    body:
+      typeof init?.body === 'string'
+        ? (() => {
+            try {
+              return JSON.parse(init.body);
+            } catch {
+              return init.body;
+            }
+          })()
+        : init?.body,
+  });
+
   const response = await fetch(`${baseUrl}${pathName}`, {
     ...init,
     headers: {
@@ -115,6 +174,12 @@ async function insecureFetch<T>(
   const body = expectJson
     ? ((await response.json().catch(() => ({}))) as T)
     : ((await response.text()) as T);
+
+  writeTrace(`RESPONSE ${init?.method ?? 'GET'} ${baseUrl}${pathName}`, {
+    status: response.status,
+    headers: Object.fromEntries(response.headers.entries()),
+    body,
+  });
 
   return {
     status: response.status,
@@ -136,13 +201,16 @@ async function getAuthToken(): Promise<string> {
   }
 
   authToken = response.body.access_token;
+  writeTrace('AUTH TOKEN ISSUED', { token_length: authToken.length });
   return authToken;
 }
 
 async function pollPayment(paymentId: string): Promise<PaymentDetail> {
   const started = Date.now();
+  let iteration = 0;
 
   while (Date.now() - started < config.asyncPollTimeoutMs) {
+    iteration += 1;
     const res = await insecureFetch<PaymentDetail>(`/payments/${paymentId}`, {
       method: 'GET',
       headers: buildHeaders(),
@@ -150,6 +218,10 @@ async function pollPayment(paymentId: string): Promise<PaymentDetail> {
 
     if (res.status === 200) {
       const status = res.body.status;
+      writeTrace(`POLL payment ${paymentId} iteration ${iteration}`, {
+        status,
+        destination_rail: res.body.destination_rail,
+      });
       if (['COMPLETED', 'FAILED', 'REJECTED', 'DEAD_LETTER'].includes(status)) {
         return res.body;
       }
@@ -287,6 +359,7 @@ async function createPayment(
   payload: Record<string, unknown>,
   extraHeaders?: Record<string, string>,
 ): Promise<{ response: PaymentSummary; status: number }> {
+  writeTrace('CREATE PAYMENT PAYLOAD', { payload, extraHeaders });
   const res = await insecureFetch<PaymentSummary>('/payments', {
     method: 'POST',
     headers: buildHeaders(extraHeaders),
@@ -307,8 +380,10 @@ async function runCheck(
   },
 ): Promise<void> {
   const started = Date.now();
+  writeTrace(`CHECK START ${spec.id}`, { category: spec.category, title: spec.title });
   try {
     const outcome = await spec.run();
+    writeTrace(`CHECK END ${spec.id}`, { status: outcome.status, evidence: outcome.evidence });
     results.push({
       id: spec.id,
       category: spec.category,
@@ -319,6 +394,10 @@ async function runCheck(
       evidence: outcome.evidence,
     });
   } catch (error) {
+    writeTrace(`CHECK ERROR ${spec.id}`, {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     results.push({
       id: spec.id,
       category: spec.category,
@@ -413,6 +492,12 @@ function buildMarkdown(report: ValidationReport): string {
 }
 
 async function main() {
+  await ensureTraceDir();
+  writeTrace('CORE VALIDATION START', {
+    mode: config.mode,
+    target: baseUrl,
+    outputDir: config.outputDir,
+  });
   const results: CheckResult[] = [];
   const createdPaymentIds: string[] = [];
 
@@ -1029,8 +1114,9 @@ async function main() {
       run: async () => {
         const pool = new Pool({ connectionString: config.dbUrl });
         try {
-          const dbRes = await pool.query('SELECT current_database() AS db, current_user AS usr, NOW() AS now');
-          return {
+        const dbRes = await pool.query('SELECT current_database() AS db, current_user AS usr, NOW() AS now');
+        writeTrace('DB QUERY RESULT', dbRes.rows[0]);
+        return {
             status: 'passed',
             evidence: dbRes.rows[0],
           };
@@ -1063,6 +1149,7 @@ async function main() {
           const details: Record<string, unknown> = {};
           for (const queue of queues) {
             details[queue] = await channel.checkQueue(queue);
+            writeTrace(`RABBITMQ QUEUE ${queue}`, details[queue]);
           }
           return {
             status: 'passed',
@@ -1110,6 +1197,7 @@ async function main() {
       run: async () => {
         const response = await fetch(`${mock.url}/health`);
         const body = await response.json().catch(() => ({}));
+        writeTrace(`MOCK HEALTH ${mock.id}`, { url: `${mock.url}/health`, status: response.status, body });
         if (!response.ok) {
           throw new Error(`Mock health returned ${response.status}`);
         }
@@ -1149,6 +1237,13 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
   console.log(`JSON report: ${artifacts.jsonPath}`);
   console.log(`Markdown report: ${artifacts.mdPath}`);
+  console.log(`Trace log: ${tracePath}`);
+  writeTrace('CORE VALIDATION END', {
+    summary,
+    json_report: artifacts.jsonPath,
+    markdown_report: artifacts.mdPath,
+    trace_log: tracePath,
+  });
 
   if (summary.failed > 0) {
     process.exitCode = 1;

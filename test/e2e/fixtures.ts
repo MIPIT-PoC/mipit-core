@@ -18,6 +18,7 @@ let dbPool: Pool;
 let rmqConnection: amqp.Connection | null = null;
 let rmqChannel: amqp.Channel | null = null;
 let jwtToken: string | null = null;
+let requestCounter = 0;
 
 const API_PROTOCOL = process.env.API_PROTOCOL || 'http';
 const API_HOST = process.env.API_HOST || 'localhost';
@@ -25,6 +26,34 @@ const API_PORT = parseInt(process.env.PORT || (API_PROTOCOL === 'https' ? '443' 
 
 async function getApiTransport() {
   return API_PROTOCOL === 'https' ? import('https') : import('http');
+}
+
+function isSensitiveKey(key: string): boolean {
+  return /(authorization|token|secret|password|jwt)/i.test(key);
+}
+
+function sanitizeForLogs(value: unknown): unknown {
+  if (value == null) return value;
+  if (Array.isArray(value)) return value.map((item) => sanitizeForLogs(item));
+  if (typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, innerValue]) => [
+        key,
+        isSensitiveKey(key) ? '[REDACTED]' : sanitizeForLogs(innerValue),
+      ]),
+    );
+  }
+  if (typeof value === 'string' && value.startsWith('Bearer ')) {
+    return 'Bearer [REDACTED]';
+  }
+  return value;
+}
+
+function logTrace(label: string, payload?: unknown) {
+  console.log(`[E2E][${new Date().toISOString()}] ${label}`);
+  if (payload !== undefined) {
+    console.log(JSON.stringify(sanitizeForLogs(payload), null, 2));
+  }
 }
 
 function buildApiRequestOptions(
@@ -62,6 +91,8 @@ export async function getJWTToken(): Promise<string | null> {
       5000,
     );
 
+    logTrace('AUTH REQUEST /auth/token', { options });
+
     const req = transport.request(options, (res) => {
       let data = '';
 
@@ -72,6 +103,7 @@ export async function getJWTToken(): Promise<string | null> {
       res.on('end', () => {
         try {
           const body = JSON.parse(data);
+          logTrace('AUTH RESPONSE /auth/token', { statusCode: res.statusCode, body });
 
           if (res.statusCode === 200 && body.access_token) {
             jwtToken = body.access_token as string;
@@ -118,7 +150,7 @@ export async function setupDatabase(): Promise<Pool> {
     const client = await dbPool.connect();
     await client.query('SELECT NOW()');
     client.release();
-    console.log('✓ Database connected');
+    logTrace('DATABASE CONNECTED', { connectionString });
   } catch (error) {
     throw new Error(`Cannot connect to database: ${error}`);
   }
@@ -141,7 +173,7 @@ export async function setupRabbitMQ(): Promise<{
 
     await rmqChannel.assertQueue('payment-acks', { durable: true });
 
-    console.log('✓ RabbitMQ connected');
+    logTrace('RABBITMQ CONNECTED', { rmqUrl, assertedQueues: ['payment-acks'] });
   } catch (error) {
     throw new Error(`Cannot connect to RabbitMQ: ${error}`);
   }
@@ -186,7 +218,10 @@ export async function cleanupDatabase(testTag: string): Promise<void> {
       [referencePattern, tracePattern, `%${testTag}%`],
     );
 
-    console.log(`✓ Cleaned up test payments for: ${testTag}`);
+    logTrace(`DATABASE CLEANUP ${testTag}`, {
+      referencePattern,
+      tracePattern,
+    });
   } catch (error) {
     console.warn(`Warning: Could not cleanup database: ${error}`);
   }
@@ -227,6 +262,7 @@ export async function teardown(): Promise<void> {
 export async function makePaymentRequest(payload: any): Promise<{ status: number; body: any }> {
   const transport = await getApiTransport();
   const token = await getJWTToken();
+  const requestId = ++requestCounter;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -237,6 +273,10 @@ export async function makePaymentRequest(payload: any): Promise<{ status: number
   }
   return new Promise((resolve, reject) => {
     const options = buildApiRequestOptions('/payments', 'POST', headers, 10000);
+    logTrace(`HTTP REQUEST #${requestId} POST /payments`, {
+      options,
+      payload,
+    });
 
     const req = transport.request(options, (res) => {
       let data = '';
@@ -248,8 +288,16 @@ export async function makePaymentRequest(payload: any): Promise<{ status: number
       res.on('end', () => {
         try {
           const body = JSON.parse(data);
+          logTrace(`HTTP RESPONSE #${requestId} POST /payments`, {
+            statusCode: res.statusCode,
+            body,
+          });
           resolve({ status: res.statusCode || 500, body });
         } catch {
+          logTrace(`HTTP RESPONSE #${requestId} POST /payments (non-json)`, {
+            statusCode: res.statusCode,
+            body: data,
+          });
           resolve({
             status: res.statusCode || 500,
             body: { error: data },
@@ -304,6 +352,7 @@ export async function waitForMessage(
         try {
           const content = JSON.parse(msg.content.toString());
           messages.push(msg);
+          logTrace(`RABBITMQ MESSAGE ${queueName}`, content);
 
           if (!predicate || predicate(content)) {
             clearTimeout(timeout);
@@ -342,6 +391,12 @@ export async function assertPaymentStatus(paymentId: string, expectedStatus: str
   }
 
   const payment = result.rows[0];
+  logTrace('DB PAYMENT STATUS ASSERT', {
+    paymentId,
+    expectedStatus,
+    actualStatus: payment.status,
+    payment,
+  });
 
   if (payment.status !== expectedStatus) {
     throw new Error(`Payment status mismatch. Expected: ${expectedStatus}, Got: ${payment.status}`);
@@ -420,7 +475,10 @@ export async function query(sql: string, params?: any[]): Promise<any> {
     throw new Error('Database not initialized');
   }
 
-  return dbPool.query(sql, params);
+  logTrace('DB QUERY', { sql, params });
+  const result = await dbPool.query(sql, params);
+  logTrace('DB QUERY RESULT', { rowCount: result.rowCount, rows: result.rows });
+  return result;
 }
 
 export { dbPool, rmqConnection, rmqChannel };
@@ -429,6 +487,7 @@ export { dbPool, rmqConnection, rmqChannel };
  */
 export async function forcePixRejectNext(): Promise<void> {
   const pixUrl = process.env.PIX_SPI_URL || 'http://localhost:8001';
+  logTrace('MOCK CONTROL PIX reject-next', { url: `${pixUrl}/admin/reject-next` });
   const res = await fetch(`${pixUrl}/admin/reject-next`, { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to force PIX rejection: ${res.statusText}`);
 }
@@ -438,6 +497,7 @@ export async function forcePixRejectNext(): Promise<void> {
  */
 export async function forcePixTimeoutNext(): Promise<void> {
   const pixUrl = process.env.PIX_SPI_URL || 'http://localhost:8001';
+  logTrace('MOCK CONTROL PIX timeout-next', { url: `${pixUrl}/admin/timeout-next` });
   const res = await fetch(`${pixUrl}/admin/timeout-next`, { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to force PIX timeout: ${res.statusText}`);
 }
@@ -447,6 +507,7 @@ export async function forcePixTimeoutNext(): Promise<void> {
  */
 export async function forceSpeiRejectNext(): Promise<void> {
   const speiUrl = process.env.SPEI_CECOBAN_URL || 'http://localhost:8002';
+  logTrace('MOCK CONTROL SPEI reject-next', { url: `${speiUrl}/admin/reject-next` });
   const res = await fetch(`${speiUrl}/admin/reject-next`, { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to force SPEI rejection: ${res.statusText}`);
 }
@@ -456,6 +517,7 @@ export async function forceSpeiRejectNext(): Promise<void> {
  */
 export async function forceSpeiTimeoutNext(): Promise<void> {
   const speiUrl = process.env.SPEI_CECOBAN_URL || 'http://localhost:8002';
+  logTrace('MOCK CONTROL SPEI timeout-next', { url: `${speiUrl}/admin/timeout-next` });
   const res = await fetch(`${speiUrl}/admin/timeout-next`, { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to force SPEI timeout: ${res.statusText}`);
 }
@@ -468,6 +530,7 @@ export async function resetMockConfig(rail: 'PIX' | 'SPEI'): Promise<void> {
     rail === 'PIX'
       ? `${process.env.PIX_SPI_URL || 'http://localhost:8001'}/admin/reset`
       : `${process.env.SPEI_CECOBAN_URL || 'http://localhost:8002'}/admin/reset`;
+  logTrace(`MOCK CONTROL ${rail} reset`, { url });
   const res = await fetch(url, { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to reset ${rail} mock: ${res.statusText}`);
 }
@@ -485,6 +548,11 @@ export async function waitForPaymentStatus(
   const startTime = Date.now();
   while (Date.now() - startTime < maxWaitMs) {
     const result = await dbPool.query(`SELECT * FROM payments WHERE payment_id = $1`, [paymentId]);
+    logTrace('DB WAIT FOR PAYMENT STATUS', {
+      paymentId,
+      expectedStatus,
+      currentStatus: result.rows[0]?.status,
+    });
 
     if (result.rows.length > 0 && result.rows[0].status === expectedStatus) {
       return result.rows[0];
@@ -507,6 +575,7 @@ export async function getAuditEvents(paymentId: string): Promise<any[]> {
     [paymentId],
   );
 
+  logTrace('DB AUDIT EVENTS', { paymentId, rowCount: result.rowCount, rows: result.rows });
   return result.rows;
 }
 
@@ -519,6 +588,7 @@ export async function getPaymentDetails(paymentId: string): Promise<any> {
   const result = await dbPool.query(`SELECT * FROM payments WHERE payment_id = $1`, [paymentId]);
 
   if (result.rows.length === 0) throw new Error(`Payment not found: ${paymentId}`);
+  logTrace('DB PAYMENT DETAILS', { paymentId, payment: result.rows[0] });
   return result.rows[0];
 }
 
@@ -531,6 +601,7 @@ export async function makePaymentRequestWithIdempotency(
 ): Promise<{ status: number; body: any }> {
   const transport = await getApiTransport();
   const token = await getJWTToken();
+  const requestId = ++requestCounter;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -542,6 +613,10 @@ export async function makePaymentRequestWithIdempotency(
   }
 
   return new Promise((resolve, reject) => {
+    logTrace(`HTTP REQUEST #${requestId} POST /payments (idempotency)`, {
+      idempotencyKey,
+      payload,
+    });
     const req = transport.request(
       buildApiRequestOptions('/payments', 'POST', headers, 10000),
       (res) => {
@@ -553,11 +628,20 @@ export async function makePaymentRequestWithIdempotency(
 
         res.on('end', () => {
           try {
+            const body = JSON.parse(data);
+            logTrace(`HTTP RESPONSE #${requestId} POST /payments (idempotency)`, {
+              statusCode: res.statusCode,
+              body,
+            });
             resolve({
               status: res.statusCode || 500,
-              body: JSON.parse(data),
+              body,
             });
           } catch {
+            logTrace(`HTTP RESPONSE #${requestId} POST /payments (idempotency non-json)`, {
+              statusCode: res.statusCode,
+              body: data,
+            });
             resolve({
               status: res.statusCode || 500,
               body: { error: data },
@@ -587,5 +671,6 @@ export async function makePaymentRequestWithIdempotency(
 export async function paymentExists(paymentId: string): Promise<boolean> {
   if (!dbPool) return false;
   const result = await dbPool.query(`SELECT 1 FROM payments WHERE payment_id = $1`, [paymentId]);
+  logTrace('DB PAYMENT EXISTS', { paymentId, exists: result.rows.length > 0 });
   return result.rows.length > 0;
 }
