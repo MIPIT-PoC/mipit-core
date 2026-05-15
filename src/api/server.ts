@@ -10,6 +10,7 @@ import { metricsRoutes } from './routes/metrics.js';
 import { translateRoutes } from './routes/translate.js';
 import { registerSseRoutes } from './routes/sse.js';
 import { registerAnalyticsRoutes } from './routes/analytics.js';
+import { registerUiProxyRoutes } from './routes/ui-proxy.js';
 import type { Translator } from '../translation/translator.js';
 import type { MappingLoader } from '../translation/mapping-loader.js';
 import { errorHandler } from './middleware/error-handler.js';
@@ -94,6 +95,7 @@ export async function buildServer(deps: ServerDeps) {
     scoped.addHook('onRequest', authMiddleware);
     await paymentRoutes(scoped, deps);
     await translateRoutes(scoped, { translator: deps.translator, mappingLoader: deps.mappingLoader });
+    await registerUiProxyRoutes(scoped);
     await registerAnalyticsRoutes(scoped, {
       reconciliationService: deps.reconciliationService,
       rateLimiter: deps.rateLimiter,
