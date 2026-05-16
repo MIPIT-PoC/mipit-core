@@ -7,20 +7,35 @@ type RailTargets = {
   mockBaseUrl: string;
 };
 
+const DEFAULT_RAIL_TARGETS: Record<Rail, RailTargets> = {
+  PIX: {
+    healthUrl: 'http://adapter-pix:9101/health',
+    mockBaseUrl: 'http://adapter-pix:9001',
+  },
+  SPEI: {
+    healthUrl: 'http://adapter-spei:9102/health',
+    mockBaseUrl: 'http://adapter-spei:9002',
+  },
+  BRE_B: {
+    healthUrl: 'http://adapter-breb:9103/health',
+    mockBaseUrl: 'http://adapter-breb:9003',
+  },
+};
+
 function getRailTargets(rail: string): RailTargets {
   const key = rail.toUpperCase() as Rail;
   const envMap: Record<Rail, RailTargets> = {
     PIX: {
-      healthUrl: process.env.UI_PROXY_PIX_HEALTH_URL ?? '',
-      mockBaseUrl: process.env.UI_PROXY_PIX_MOCK_BASE_URL ?? '',
+      healthUrl: process.env.UI_PROXY_PIX_HEALTH_URL ?? DEFAULT_RAIL_TARGETS.PIX.healthUrl,
+      mockBaseUrl: process.env.UI_PROXY_PIX_MOCK_BASE_URL ?? DEFAULT_RAIL_TARGETS.PIX.mockBaseUrl,
     },
     SPEI: {
-      healthUrl: process.env.UI_PROXY_SPEI_HEALTH_URL ?? '',
-      mockBaseUrl: process.env.UI_PROXY_SPEI_MOCK_BASE_URL ?? '',
+      healthUrl: process.env.UI_PROXY_SPEI_HEALTH_URL ?? DEFAULT_RAIL_TARGETS.SPEI.healthUrl,
+      mockBaseUrl: process.env.UI_PROXY_SPEI_MOCK_BASE_URL ?? DEFAULT_RAIL_TARGETS.SPEI.mockBaseUrl,
     },
     BRE_B: {
-      healthUrl: process.env.UI_PROXY_BREB_HEALTH_URL ?? '',
-      mockBaseUrl: process.env.UI_PROXY_BREB_MOCK_BASE_URL ?? '',
+      healthUrl: process.env.UI_PROXY_BREB_HEALTH_URL ?? DEFAULT_RAIL_TARGETS.BRE_B.healthUrl,
+      mockBaseUrl: process.env.UI_PROXY_BREB_MOCK_BASE_URL ?? DEFAULT_RAIL_TARGETS.BRE_B.mockBaseUrl,
     },
   };
 
