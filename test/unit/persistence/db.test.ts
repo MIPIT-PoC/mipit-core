@@ -39,9 +39,9 @@ describe('db', () => {
 
     expect(Pool).toHaveBeenCalledWith({
       connectionString: 'postgres://test',
-      max: 20,
+      max: 50,
       idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
+      connectionTimeoutMillis: 10_000,
     });
     expect(mockQuery).toHaveBeenCalledWith('SELECT 1');
     expect(pool).toBe(mockPoolInstance);
@@ -85,9 +85,9 @@ describe('db', () => {
     expect(Pool).toHaveBeenCalledWith(
       expect.objectContaining({
         connectionString: 'postgres://verify',
-        max: 20,
+        max: 50,
         idleTimeoutMillis: 30_000,
-        connectionTimeoutMillis: 5_000,
+        connectionTimeoutMillis: 10_000,
       }),
     );
   });

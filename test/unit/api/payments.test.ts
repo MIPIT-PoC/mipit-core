@@ -8,7 +8,7 @@ describe('Payment schemas', () => {
         amount: 100,
         currency: 'USD',
         debtor: { alias: 'PIX-key-123', name: 'Sender' },
-        creditor: { alias: 'SPEI-CLABE-456', name: 'Receiver' },
+        creditor: { alias: 'SPEI-072123456789012344', name: 'Receiver' },
       };
 
       const result = createPaymentSchema.safeParse(valid);
@@ -20,7 +20,7 @@ describe('Payment schemas', () => {
         amount: -10,
         currency: 'USD',
         debtor: { alias: 'PIX-key-123' },
-        creditor: { alias: 'SPEI-CLABE-456' },
+        creditor: { alias: 'SPEI-072123456789012344' },
       };
 
       const result = createPaymentSchema.safeParse(invalid);
@@ -32,7 +32,7 @@ describe('Payment schemas', () => {
         amount: 100,
         currency: 'USD',
         debtor: { alias: '' },
-        creditor: { alias: 'SPEI-CLABE-456' },
+        creditor: { alias: 'SPEI-072123456789012344' },
       };
 
       const result = createPaymentSchema.safeParse(invalid);
@@ -43,7 +43,7 @@ describe('Payment schemas', () => {
       const noCurrency = {
         amount: 100,
         debtor: { alias: 'PIX-key-123' },
-        creditor: { alias: 'SPEI-CLABE-456' },
+        creditor: { alias: 'SPEI-072123456789012344' },
       };
 
       const result = createPaymentSchema.parse(noCurrency);
@@ -54,7 +54,7 @@ describe('Payment schemas', () => {
       const noPurpose = {
         amount: 100,
         debtor: { alias: 'PIX-key-123' },
-        creditor: { alias: 'SPEI-CLABE-456' },
+        creditor: { alias: 'SPEI-072123456789012344' },
       };
 
       const result = createPaymentSchema.parse(noPurpose);
@@ -66,7 +66,7 @@ describe('Payment schemas', () => {
         amount: 100,
         currency: 'US',
         debtor: { alias: 'PIX-key-123' },
-        creditor: { alias: 'SPEI-CLABE-456' },
+        creditor: { alias: 'SPEI-072123456789012344' },
       };
 
       const result = createPaymentSchema.safeParse(invalid);

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CHARGE_BEARER_ENUM } from '../../domain/models/canonical.js';
 
 /** Validates a CLABE number (18 digits + correct check digit) */
 function isValidCLABE(clabe: string): boolean {
@@ -18,12 +19,12 @@ function isValidColombiaId(id: string): boolean {
   return /^\d{9,10}-\d$/.test(id);
 }
 
-/** Validates a BREB alias key (phone, NIT, email, or alias) */
+/** Validates a BREB alias key (phone, NIT, email, alias, CC, CE, passport) */
 function isValidBrebKey(key: string): boolean {
   if (key.startsWith('+57')) return isValidColombiaPhone(key);
   if (/^\d/.test(key) && key.includes('-')) return isValidColombiaId(key);
   if (key.includes('@')) return key.includes('.') && key.length >= 5;
-  // Generic alias: at least 3 chars
+  // Generic alias / CC / CE / passport: at least 3 chars
   return key.length >= 3;
 }
 
@@ -62,6 +63,12 @@ export const createPaymentSchema = z.object({
   }),
   purpose: z.string().max(35).optional().default('P2P'),
   reference: z.string().max(140).optional().default('MIPIT-POC'),
+  /**
+   * ISO 20022 ChrgBr (Charge Bearer). Per pacs.008.001.10 [1..1] mandatory.
+   * For instant payment rails (PIX, SPEI, Bre-B) the default is SLEV
+   * (service-level — charges per SLA, no separate negotiation).
+   */
+  chargeBearer: z.enum(CHARGE_BEARER_ENUM).optional().default('SLEV'),
 });
 
 export type CreatePaymentRequest = z.infer<typeof createPaymentSchema>;

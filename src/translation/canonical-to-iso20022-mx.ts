@@ -31,8 +31,16 @@ export async function canonicalToIso20022Mx(canonical: CanonicalPacs008): Promis
       CreDtTm: creDtTm,
       NbOfTxs: '1',
       SttlmInf: {
-        SttlmMtd: ((canonical.grpHdr as Record<string, unknown>)?.sttlmInf as Record<string, unknown>)?.['sttlmMtd'] as 'CLRG' ?? 'CLRG',
+        SttlmMtd: canonical.grpHdr?.sttlmInf?.sttlmMtd ?? 'CLRG',
+        // P01: emit ClrSys.Cd when present (USABA for FedNow, BACEN for PIX, etc.)
+        ...(canonical.grpHdr?.sttlmInf?.clrSys?.cd
+          ? { ClrSys: { Cd: canonical.grpHdr.sttlmInf.clrSys.cd } }
+          : {}),
       },
+      // P01: emit InitgPty when present (CBPR+ optional)
+      ...(canonical.grpHdr?.initgPty?.name
+        ? { InitgPty: { Nm: canonical.grpHdr.initgPty.name } }
+        : {}),
       InstgAgt: canonical.origin.bic
         ? { FinInstnId: { BICFI: canonical.origin.bic } }
         : undefined,
@@ -46,6 +54,8 @@ export async function canonicalToIso20022Mx(canonical: CanonicalPacs008): Promis
         InstrId: canonical.pmtId.instrId,
         EndToEndId: canonical.pmtId.endToEndId,
         TxId: canonical.pmtId.txId,
+        // P01: UETR mandatory in pacs.008.001.10
+        UETR: canonical.pmtId.uetr,
       },
 
       IntrBkSttlmAmt: {
@@ -57,7 +67,10 @@ export async function canonicalToIso20022Mx(canonical: CanonicalPacs008): Promis
         ? { Ccy: canonical.amount.instdAmtCcy ?? canonical.amount.currency, value: canonical.amount.instdAmt.toFixed(2) }
         : undefined,
 
-      IntrBkSttlmDt: isoDate,
+      IntrBkSttlmDt: canonical.intrBkSttlmDt ?? isoDate,
+
+      // P01: ChrgBr mandatory in pacs.008.001.10
+      ChrgBr: canonical.chrgBr,
 
       XchgRate: canonical.fx?.rate ? String(canonical.fx.rate) : undefined,
 
@@ -79,11 +92,15 @@ export async function canonicalToIso20022Mx(canonical: CanonicalPacs008): Promis
   return msg;
 }
 
-/** Serializes an ISO 20022 pacs.008 to a wrapped Document JSON */
+/**
+ * Serializes an ISO 20022 pacs.008 to a wrapped Document JSON.
+ * P01: namespace bumped to pacs.008.001.10 (was .08). Note this is a
+ * JSON wrap, NOT XML — see ADR-002 Limitations.
+ */
 export function wrapInDocument(msg: Iso20022Pacs008): Record<string, unknown> {
   return {
     Document: {
-      '@xmlns': 'urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08',
+      '@xmlns': 'urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10',
       FIToFICstmrCdtTrf: msg,
     },
   };

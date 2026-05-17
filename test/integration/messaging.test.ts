@@ -78,7 +78,7 @@ describe('Messaging (integration)', () => {
         ack: jest.fn(),
         nack: jest.fn(),
       };
-      const paymentRepo = { updateAck: jest.fn().mockResolvedValue({}) };
+      const paymentRepo = { updateRailAck: jest.fn().mockResolvedValue({ destination_rail: 'SPEI' }) };
       const auditService = { log: jest.fn().mockResolvedValue(undefined) };
 
       return { channel, paymentRepo, auditService, getCallback: () => callback! };
@@ -107,7 +107,11 @@ describe('Messaging (integration)', () => {
 
       await m.getCallback()(fakeMsg(validAck));
 
-      expect(m.paymentRepo.updateAck).toHaveBeenCalledWith('PMT-INT1', { status: 'ACCEPTED', rail_tx_id: 'TX-100' }, PAYMENT_STATUS.COMPLETED);
+      expect(m.paymentRepo.updateRailAck).toHaveBeenCalledWith(
+        'PMT-INT1',
+        expect.objectContaining({ status: 'ACCEPTED', tx_sts: 'ACSC' }),
+        PAYMENT_STATUS.COMPLETED,
+      );
     });
 
     it('should update payment to REJECTED on REJECTED ack', async () => {
@@ -117,7 +121,11 @@ describe('Messaging (integration)', () => {
 
       await m.getCallback()(fakeMsg({ ...validAck, rail_ack: { status: 'REJECTED' } }));
 
-      expect(m.paymentRepo.updateAck).toHaveBeenCalledWith('PMT-INT1', { status: 'REJECTED' }, PAYMENT_STATUS.REJECTED);
+      expect(m.paymentRepo.updateRailAck).toHaveBeenCalledWith(
+        'PMT-INT1',
+        expect.objectContaining({ status: 'REJECTED', tx_sts: 'RJCT' }),
+        PAYMENT_STATUS.REJECTED,
+      );
     });
 
     it('should update payment to FAILED on ERROR ack', async () => {
@@ -127,7 +135,11 @@ describe('Messaging (integration)', () => {
 
       await m.getCallback()(fakeMsg({ ...validAck, rail_ack: { status: 'ERROR' } }));
 
-      expect(m.paymentRepo.updateAck).toHaveBeenCalledWith('PMT-INT1', { status: 'ERROR' }, PAYMENT_STATUS.FAILED);
+      expect(m.paymentRepo.updateRailAck).toHaveBeenCalledWith(
+        'PMT-INT1',
+        expect.objectContaining({ status: 'ERROR', tx_sts: 'RJCT' }),
+        PAYMENT_STATUS.FAILED,
+      );
     });
 
     it('should log audit event with adapter and latency metadata', async () => {

@@ -1,4 +1,5 @@
 import { ulid } from 'ulid';
+import { randomUUID } from 'node:crypto';
 import type { CreatePaymentRequest } from '../api/schemas/payment-request.js';
 import type { CanonicalPacs008 } from '../domain/models/canonical.js';
 import { PAYMENT_STATUS } from '../config/constants.js';
@@ -31,13 +32,20 @@ export class PaymentPipeline {
     const paymentId = context.paymentId ?? `PMT-${ulid()}`;
     const traceId = context.traceId ?? ulid();
     const now = new Date().toISOString();
-    const log = this.logger.child({ payment_id: paymentId, trace_id: traceId });
+
+    // P01: Generate UETR upfront — propagates through the entire chain
+    //      (pacs.008 outbound, pacs.002 ack, pacs.004 return).
+    const uetr = randomUUID();
+    const intrBkSttlmDt = now.slice(0, 10); // ISODate YYYY-MM-DD
+    const chargeBearer = request.chargeBearer ?? 'SLEV';
+
+    const log = this.logger.child({ payment_id: paymentId, trace_id: traceId, uetr });
 
     const originRail = this.inferRail(request.debtor.alias);
     log.info({ origin_rail: originRail }, 'Step 1: Rail inferred from debtor alias');
 
     try {
-      // Step 2: Persist with status RECEIVED
+      // Step 2: Persist with status RECEIVED, including ISO 20022 columns
       await this.paymentRepo.create({
         payment_id: paymentId,
         idempotency_key: context.idempotencyKey,
@@ -54,11 +62,20 @@ export class PaymentPipeline {
         origin_payload: request,
         trace_id: traceId,
         created_at: now,
-      });
+        // P01 — ISO 20022 columns
+        uetr,
+        charge_bearer: chargeBearer,
+        interbank_settlement_date: intrBkSttlmDt,
+        // instructed = original (settlement filled later post-FX)
+        instructed_amount: request.amount,
+        instructed_currency: request.currency,
+      } as any);
       await this.auditService.log(paymentId, 'PAYMENT_RECEIVED', 'system', {
         origin_rail: originRail,
         amount: request.amount,
         currency: request.currency,
+        uetr,
+        charge_bearer: chargeBearer,
       }, traceId);
       log.info('Step 2: Payment persisted with RECEIVED status');
 
@@ -71,21 +88,37 @@ export class PaymentPipeline {
       }, traceId);
       log.info('Step 3: Payload validated');
 
-      // Step 4: Translate to canonical (pacs.008) -> CANONICALIZED
+      // Step 4: Translate to canonical (pacs.008-derived) -> CANONICALIZED
       const stopTranslation = startLatencyTimer('pipeline_to_canonical');
-      const canonical: CanonicalPacs008 = await this.translator.toCanonical(
+      const canonicalRaw: CanonicalPacs008 = await this.translator.toCanonical(
         originRail,
         request,
         paymentId,
         traceId,
       );
       stopTranslation();
+
+      // P01 — Stamp the mandatory ISO 20022 fields onto the canonical.
+      //        Translators may return without these (legacy code paths).
+      const existingPmtId = canonicalRaw.pmtId ?? { endToEndId: `E2E-${paymentId}` };
+      const canonical: CanonicalPacs008 = {
+        ...canonicalRaw,
+        chrgBr: chargeBearer,
+        intrBkSttlmDt,
+        pmtId: {
+          ...existingPmtId,
+          uetr,
+          txId: existingPmtId.txId ?? existingPmtId.endToEndId,
+        },
+      };
+
       await this.paymentRepo.updateCanonical(paymentId, canonical, PAYMENT_STATUS.CANONICALIZED);
       await this.auditService.log(paymentId, 'CANONICAL_UPDATED', 'system-translator', {
-        pacs008_version: '008.001.08',
+        pacs008_version: 'pacs.008.001.10-derived',
         fields_count: Object.keys(canonical).length,
+        uetr,
       }, traceId);
-      log.info('Step 4: Translated to canonical pacs.008');
+      log.info('Step 4: Translated to canonical (pacs.008-derived)');
 
       // Step 5: Normalize
       const stopNormalization = startLatencyTimer('pipeline_normalization');
@@ -97,6 +130,19 @@ export class PaymentPipeline {
       }, traceId);
       log.info({ currency: normalized.amount.currency }, 'Step 5: Normalization complete');
 
+      // Persist FX + settlement amounts post-normalize (P01 / P05)
+      try {
+        await this.paymentRepo.updateFxAndSettlement(
+          paymentId,
+          { amount: request.amount, currency: request.currency },
+          { amount: normalized.amount.value, currency: normalized.amount.currency },
+          normalized.fx?.rate ?? null,
+          normalized.fx?.source_provider ?? null,
+        );
+      } catch (err) {
+        log.warn({ err }, 'updateFxAndSettlement failed (non-fatal)');
+      }
+
       // Step 6: Route -> ROUTED
       const stopRouting = startLatencyTimer('pipeline_routing');
       const route = await this.routeEngine.resolve(normalized);
@@ -106,6 +152,7 @@ export class PaymentPipeline {
         route.destination,
         route.ruleName,
         PAYMENT_STATUS.ROUTED,
+        normalized.destination?.institutionCode ?? null,
       );
       await this.auditService.logRoutingDecision(
         paymentId,
@@ -127,6 +174,7 @@ export class PaymentPipeline {
       await this.publisher.publishToAdapter(route.destination, {
         payment_id: paymentId,
         trace_id: traceId,
+        uetr,
         canonical: normalized,
         translated,
         destination_rail: route.destination,
@@ -167,6 +215,10 @@ export class PaymentPipeline {
         route_rule_applied: route.ruleName,
         amount: request.amount,
         currency: request.currency,
+        // P01 — Surface ISO 20022 fields in the response
+        uetr,
+        charge_bearer: chargeBearer,
+        interbank_settlement_date: intrBkSttlmDt,
         fx: normalized.fx ? {
           source_currency: normalized.fx.source_currency,
           target_currency: normalized.fx.target_currency,

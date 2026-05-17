@@ -22,7 +22,8 @@ export class IdempotencyRepository {
     return record;
   }
 
-  async insert(record: IdempotencyRecord): Promise<void> {
+  async insert(record: IdempotencyRecord, ttlHours = 24): Promise<void> {
+    const expiresAt = new Date(Date.now() + ttlHours * 3600 * 1000).toISOString();
     await this.db.query(SQL.INSERT_IDEMPOTENCY, [
       record.idempotency_key,
       record.payment_id,
@@ -30,15 +31,23 @@ export class IdempotencyRepository {
       record.response_status,
       record.response_body ? JSON.stringify(record.response_body) : null,
       record.created_at,
+      expiresAt,
     ]);
-    logger.debug({ idempotency_key: record.idempotency_key, payment_id: record.payment_id }, 'Idempotency key inserted');
+    logger.debug({ idempotency_key: record.idempotency_key, payment_id: record.payment_id, expires_at: expiresAt }, 'Idempotency key inserted');
   }
 
   /**
-   * Atomically tries to insert an idempotency record.
+   * Atomically tries to insert an idempotency record (P01/P06 — TTL fix).
    * Returns true if inserted (this request won the race), false if another request already claimed the key.
+   *
+   * P01 fix: explicitly writes `expires_at` so `FIND_IDEMPOTENCY_BY_KEY`'s
+   * `WHERE expires_at > NOW()` actually filters on a real value (was NULL before).
    */
-  async tryInsert(record: Pick<IdempotencyRecord, 'idempotency_key' | 'payment_id' | 'request_hash' | 'created_at'>): Promise<boolean> {
+  async tryInsert(
+    record: Pick<IdempotencyRecord, 'idempotency_key' | 'payment_id' | 'request_hash' | 'created_at'>,
+    ttlHours = 24,
+  ): Promise<boolean> {
+    const expiresAt = new Date(Date.now() + ttlHours * 3600 * 1000).toISOString();
     const result = await this.db.query(SQL.INSERT_IDEMPOTENCY, [
       record.idempotency_key,
       record.payment_id,
@@ -46,9 +55,10 @@ export class IdempotencyRepository {
       null,
       null,
       record.created_at,
+      expiresAt,
     ]);
     const claimed = (result.rowCount ?? 0) > 0;
-    logger.debug({ idempotency_key: record.idempotency_key, payment_id: record.payment_id, claimed }, 'Idempotency tryInsert');
+    logger.debug({ idempotency_key: record.idempotency_key, payment_id: record.payment_id, claimed, expires_at: expiresAt }, 'Idempotency tryInsert');
     return claimed;
   }
 

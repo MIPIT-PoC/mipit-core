@@ -36,7 +36,7 @@ const validPayload = {
   amount: 100,
   currency: 'BRL',
   debtor: { alias: 'PIX-chave-123', name: 'Sender' },
-  creditor: { alias: 'SPEI-123456789012345678', name: 'Receiver' },
+  creditor: { alias: 'SPEI-072123456789012344', name: 'Receiver' },
 };
 
 const mockPipeline = {
@@ -70,6 +70,7 @@ const mockAuditRepo = {
 const mockIdempotencyRepo = {
   findByKey: jest.fn().mockResolvedValue(null),
   insert: jest.fn(),
+  tryInsert: jest.fn().mockResolvedValue(true),
   updateResponse: jest.fn(),
 };
 
@@ -250,18 +251,26 @@ describe('HTTP → Pipeline Integration', () => {
         payload: validPayload,
       });
 
-      expect(mockIdempotencyRepo.insert).toHaveBeenCalledWith(
+      // P01: route now calls tryInsert (claim phase) + updateResponse (response phase).
+      expect(mockIdempotencyRepo.tryInsert).toHaveBeenCalledWith(
         expect.objectContaining({
           idempotency_key: 'idem-store',
-          payment_id: 'PMT-TEST-001',
-          response_status: 201,
+          request_hash: expect.any(String),
         }),
+      );
+      expect(mockIdempotencyRepo.updateResponse).toHaveBeenCalledWith(
+        'idem-store',
+        201,
+        expect.objectContaining({ payment_id: 'PMT-TEST-001' }),
       );
     });
 
     it('should return cached response for duplicate idempotency key', async () => {
       const crypto = require('node:crypto');
-      const hash = crypto.createHash('sha256').update(JSON.stringify(validPayload)).digest('hex');
+      const { createPaymentSchema } = require('../../src/api/schemas/payment-request');
+      // P01: hash the post-Zod-parse body (with defaults applied) so it matches the route
+      const parsed = createPaymentSchema.parse(validPayload);
+      const hash = crypto.createHash('sha256').update(JSON.stringify(parsed)).digest('hex');
 
       mockIdempotencyRepo.findByKey.mockResolvedValue({
         idempotency_key: 'idem-dup',
@@ -298,7 +307,7 @@ describe('HTTP → Pipeline Integration', () => {
         currency: 'BRL',
         debtor_alias: 'PIX-chave-123',
         debtor_name: 'Sender',
-        creditor_alias: 'SPEI-123456789012345678',
+        creditor_alias: 'SPEI-072123456789012344',
         creditor_name: 'Receiver',
         purpose: 'P2P',
         reference: 'MIPIT-POC',
@@ -351,10 +360,12 @@ describe('HTTP → Pipeline Integration', () => {
   });
 
   describe('GET /health (no auth required)', () => {
-    it('should return 200 without JWT', async () => {
+    it('should return 200 on liveness probe without JWT', async () => {
+      // P08: /health is a deep probe that requires DB+MQ deps; in unit-style
+      // tests we hit /health/live which is always 200 when process is up.
       const res = await app.inject({
         method: 'GET',
-        url: '/health',
+        url: '/health/live',
       });
 
       expect(res.statusCode).toBe(200);

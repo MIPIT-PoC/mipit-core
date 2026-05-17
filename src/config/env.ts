@@ -12,6 +12,16 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info').describe('Logging level'),
   OPEN_EXCHANGE_RATES_APP_ID: z.string().optional().describe('Open Exchange Rates API key (optional — uses fallback rates if not set)'),
   WEBHOOK_SECRET: z.string().min(16).optional().describe('HMAC secret for signing webhook payloads'),
+  /** P08: Comma-separated list of allowed CORS origins. Defaults to localhost dev. */
+  CORS_ALLOWED_ORIGINS: z
+    .string()
+    .default('http://localhost:3000,http://localhost:3001,https://10.43.101.28')
+    .describe('Comma-separated CORS allowed origins'),
+  /** P08: HTTP rate limiter knobs (also read elsewhere; declared here for validation). */
+  HTTP_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(200),
+  HTTP_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
+  /** P08: Shared admin token consumed by adapter mocks' /admin/* endpoints. */
+  MOCK_ADMIN_TOKEN: z.string().min(8).optional().describe('Token forwarded by core ui-proxy to adapter admin endpoints'),
 });
 
 function validateEnv() {

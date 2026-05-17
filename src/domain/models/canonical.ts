@@ -8,37 +8,133 @@ export type SupportedRail = typeof SUPPORTED_RAILS[number];
 export const ALIAS_TYPE_ENUM = ['PIX_KEY', 'CLABE', 'IBAN', 'ACCOUNT', 'ABA_ROUTING', 'BIC', 'LLAVE_BREB'] as const;
 
 /**
- * Canonical model based on ISO 20022 pacs.008 (FIToFICustomerCreditTransfer).
- * All rails translate TO and FROM this format.
+ * Payment lifecycle status enum.
+ * Source of truth for valid status values; the DB CHECK constraint mirrors this
+ * (mipit-infra/db/migrations/008_payments_constraints_and_iso.sql).
+ */
+export const PAYMENT_STATUS_ENUM = [
+  'RECEIVED',
+  'VALIDATED',
+  'CANONICALIZED',
+  'NORMALIZED',
+  'ROUTED',
+  'QUEUED',
+  'SENT_TO_DESTINATION',
+  'ACKED_BY_RAIL',
+  'COMPLETED',
+  'FAILED',
+  'REJECTED',
+  'DUPLICATE',
+  'COMPENSATING',
+  'COMPENSATED',
+  'DEAD_LETTER',
+] as const;
+export type PaymentStatus = typeof PAYMENT_STATUS_ENUM[number];
+
+/** ISO 20022 ChrgBr (Charge Bearer) — who pays the charges. */
+export const CHARGE_BEARER_ENUM = ['DEBT', 'CRED', 'SHAR', 'SLEV'] as const;
+export type ChargeBearer = typeof CHARGE_BEARER_ENUM[number];
+
+/**
+ * MiPIT Internal Canonical Model — pacs.008-derived (JSON subset, NOT a strict
+ * pacs.008.001.10 implementation).
+ *
+ * See `mipit-docs/adrs/ADR-002-canonical-pacs008-json.md` (Limitations section)
+ * for the explicit list of pacs.008 elements not implemented.
+ *
+ * Mandatory ISO v10 fields modeled here:
+ *   - PmtId.{InstrId, EndToEndId, TxId, UETR}
+ *   - IntrBkSttlmAmt (value + currency)
+ *   - IntrBkSttlmDt
+ *   - ChrgBr (DEBT/CRED/SHAR/SLEV)
+ *
+ * Optional CBPR+ fields modeled here:
+ *   - GrpHdr.InitgPty (initiating party name)
+ *   - GrpHdr.CtrlSum
+ *   - GrpHdr.TtlIntrBkSttlmAmt
+ *   - GrpHdr.SttlmInf.ClrSys.Cd (e.g. USABA, CHATS)
  */
 export const canonicalPacs008Schema = z.object({
-  payment_id: z.string().regex(/^PMT-[A-Z0-9]{10,32}$/),
+  payment_id: z.string().regex(/^PMT-[A-Z0-9]{10,40}$/),
   created_at: z.string().datetime(),
 
   grpHdr: z.object({
-    msgId: z.string(),
+    msgId: z.string().max(35),
     creDtTm: z.string().datetime(),
     /** Number of transactions in the message (always 1 for MIPIT PoC) */
-    nbOfTxs: z.number().int().positive().default(1),
-    /** Settlement information */
-    sttlmInf: z.object({
-      sttlmMtd: z.enum(['INDA', 'INGA', 'COVE', 'CLRG']).default('CLRG'),
-    }).optional(),
+    nbOfTxs: z.number().int().positive().optional(),
+    /** Optional: control sum (sum of all instructed amounts in this batch). */
+    ctrlSum: z.number().nonnegative().optional(),
+    /** Optional: total interbank settlement amount across the batch. */
+    ttlIntrBkSttlmAmt: z
+      .object({
+        value: z.number().nonnegative(),
+        currency: z.string().length(3),
+      })
+      .optional(),
+    /** Optional: initiating party (CBPR+). */
+    initgPty: z
+      .object({
+        name: z.string().max(140).optional(),
+        id: z.string().max(35).optional(),
+        ctryOfRes: z.string().length(2).optional(),
+      })
+      .optional(),
+    /** Settlement information (optional — defaults to CLRG when omitted). */
+    sttlmInf: z
+      .object({
+        sttlmMtd: z.enum(['INDA', 'INGA', 'COVE', 'CLRG']).default('CLRG'),
+        /** Clearing system code (e.g. USABA for FedNow, BACEN for PIX). */
+        clrSys: z
+          .object({
+            cd: z.string().max(5).optional(),
+            prtry: z.string().max(35).optional(),
+          })
+          .optional(),
+      })
+      .optional(),
   }),
 
   pmtId: z.object({
-    /** End-to-End ID: unique per rail (E2E-ULID for canonical, E{ISPB}{date}{unique} for PIX SPI) */
+    /**
+     * End-to-End ID. Per pacs.008.001.10, MANDATORY [1..1]. Max length 35.
+     * Per-rail format: e.g. PIX requires `E + ISPB(8) + YYYYMMDDHHMM(BRT) + 11 alnum` = 32 chars.
+     */
     endToEndId: z.string().max(35),
-    /** Instruction ID (optional, used in SWIFT/ISO 20022) */
+    /** Instruction ID (optional, used in SWIFT/ISO 20022). Per spec [0..1]. */
     instrId: z.string().max(35).optional(),
-    /** Transaction ID (optional, used in FedNow/ISO 20022) */
+    /** Transaction ID. Per pacs.008.001.10 [1..1] MANDATORY (pipeline stamps). */
     txId: z.string().max(35).optional(),
+    /**
+     * UETR — Unique End-to-End Transaction Reference (UUIDv4).
+     * Per pacs.008.001.10 [1..1] MANDATORY (CBPR+ rule). The pipeline stamps
+     * this in step 1 of `executePipeline`; translators don't need to populate.
+     */
+    uetr: z.string().uuid().optional(),
   }),
+
+  /**
+   * ChrgBr — Charge Bearer. Per pacs.008.001.10 [1..1] MANDATORY.
+   * Translators may omit; the pipeline always stamps to 'SLEV' (service level —
+   * appropriate for instant rails) before persistence/publish.
+   *   DEBT = Borne by Debtor
+   *   CRED = Borne by Creditor
+   *   SHAR = Shared
+   *   SLEV = Service Level
+   */
+  chrgBr: z.enum(CHARGE_BEARER_ENUM).optional(),
+
+  /**
+   * Interbank Settlement Date (ISODate, YYYY-MM-DD).
+   * Per pacs.008.001.10 [1..1] MANDATORY at the CdtTrfTxInf level. The pipeline
+   * stamps this; translators may omit.
+   */
+  intrBkSttlmDt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 
   amount: z.object({
     value: z.number().positive(),
     currency: z.string().length(3),
-    /** Original instructed amount (before FX) */
+    /** Original instructed amount (before FX) — InstdAmt in ISO 20022. */
     instdAmt: z.number().positive().optional(),
     instdAmtCcy: z.string().length(3).optional(),
   }),
@@ -49,6 +145,9 @@ export const canonicalPacs008Schema = z.object({
       target_currency: z.string().length(3).optional(),
       rate: z.number().positive().optional(),
       local_amount: z.number().positive().optional(),
+      via: z.enum(['direct', 'usd']).optional(),
+      source_provider: z.string().optional(),
+      timestamp: z.string().datetime().optional(),
     })
     .optional(),
 
@@ -58,10 +157,10 @@ export const canonicalPacs008Schema = z.object({
     bic: z.string().max(11).optional(),
     /** ABA routing number (for ACH/FedNow) */
     routingNumber: z.string().length(9).optional(),
-    /** ISPB (for PIX) */
+    /** ISPB (for PIX — 8 digits BACEN-assigned) */
     ispb: z.string().length(8).optional(),
-    /** Institution code (for SPEI - BANXICO codes) */
-    institutionCode: z.string().max(5).optional(),
+    /** Institution code (for SPEI — 5-digit BANXICO catalog) */
+    institutionCode: z.string().max(8).optional(),
   }),
 
   destination: z.object({
@@ -73,14 +172,14 @@ export const canonicalPacs008Schema = z.object({
     /** ISPB (for PIX) */
     ispb: z.string().length(8).optional(),
     /** Institution code (for SPEI) */
-    institutionCode: z.string().max(5).optional(),
+    institutionCode: z.string().max(8).optional(),
   }),
 
   debtor: z.object({
     name: z.string().max(140).optional(),
     country: z.string().length(2).optional(),
     account_id: z.string(),
-    /** Tax ID: CPF/CNPJ (Brazil), RFC/CURP (Mexico), SSN/EIN (USA) */
+    /** Tax ID: CPF/CNPJ (Brazil), RFC/CURP (Mexico), SSN/EIN (USA), NIT/CC (Colombia) */
     taxId: z.string().optional(),
     /** Account type: CACC (checking), SVGS (savings), TRAN (payment), SLRY (salary) */
     accountType: z.enum(['CACC', 'SVGS', 'TRAN', 'SLRY']).optional(),
@@ -117,13 +216,19 @@ export const canonicalPacs008Schema = z.object({
   /** Free-form remittance information (up to 4 × 35 chars = 140) */
   remittanceInfo: z.string().max(140).optional(),
 
-  status: z.string(),
+  status: z.enum(PAYMENT_STATUS_ENUM),
   trace_id: z.string().optional(),
 
+  /**
+   * Embedded rail acknowledgement. Shape is legacy (kept for backward
+   * compatibility with adapters that emit the simpler ACK).
+   * Prefer reading from `Pacs002Ack` (canonical/pacs002.schema.ts) on the
+   * consumer side, which carries proper ISO 20022 TxSts codes.
+   */
   rail_ack: z
     .object({
       rail_tx_id: z.string().optional(),
-      status: z.enum(['ACCEPTED', 'REJECTED', 'ERROR']).optional(),
+      status: z.enum(['ACCEPTED', 'REJECTED', 'ERROR', 'PENDING']).optional(),
       error: z
         .object({
           code: z.string(),

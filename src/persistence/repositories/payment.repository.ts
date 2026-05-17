@@ -43,6 +43,22 @@ export class PaymentRepository {
       payment.origin_payload ? JSON.stringify(payment.origin_payload) : null,
       payment.trace_id,
       created_at,
+      // ISO 20022 columns (P01 + P09)
+      (payment as any).uetr ?? null,
+      (payment as any).end_to_end_id ?? null,
+      (payment as any).instr_id ?? null,
+      (payment as any).tx_id ?? null,
+      (payment as any).charge_bearer ?? 'SLEV',
+      (payment as any).interbank_settlement_date ?? new Date().toISOString().slice(0, 10),
+      (payment as any).instructed_amount ?? null,
+      (payment as any).instructed_currency ?? null,
+      (payment as any).settlement_amount ?? null,
+      (payment as any).settlement_currency ?? null,
+      (payment as any).exchange_rate ?? null,
+      (payment as any).exchange_rate_source ?? null,
+      (payment as any).origin_ispb ?? null,
+      (payment as any).origin_institution_code ?? null,
+      (payment as any).destination_institution_code ?? null,
     ]);
 
     if (!result.rows[0]) {
@@ -129,7 +145,13 @@ export class PaymentRepository {
    * @param status The new status (typically 'ROUTED')
    * @returns Updated PaymentIntent
    */
-  async updateRoute(paymentId: string, destinationRail: string, ruleName: string, status: string): Promise<PaymentIntent> {
+  async updateRoute(
+    paymentId: string,
+    destinationRail: string,
+    ruleName: string,
+    status: string,
+    destinationInstitutionCode?: string | null,
+  ): Promise<PaymentIntent> {
     if (!paymentId || paymentId.trim() === '') {
       throw new Error('Payment ID cannot be empty');
     }
@@ -140,12 +162,44 @@ export class PaymentRepository {
       throw new Error('Rule name cannot be empty');
     }
 
-    const result = await this.db.query(SQL.UPDATE_PAYMENT_ROUTE, [destinationRail, ruleName, status, paymentId]);
+    const result = await this.db.query(SQL.UPDATE_PAYMENT_ROUTE, [
+      destinationRail,
+      ruleName,
+      status,
+      paymentId,
+      destinationInstitutionCode ?? null,
+    ]);
 
     if (!result.rows[0]) {
       throw new Error(`Payment not found: ${paymentId}`);
     }
 
+    return result.rows[0] as PaymentIntent;
+  }
+
+  /**
+   * Persist FX results + instructed/settlement amounts (P01 + P05).
+   */
+  async updateFxAndSettlement(
+    paymentId: string,
+    instructed: { amount: number; currency: string },
+    settlement: { amount: number; currency: string },
+    rate: number | null,
+    source: string | null,
+  ): Promise<PaymentIntent> {
+    const result = await this.db.query(SQL.UPDATE_PAYMENT_FX_AND_SETTLEMENT, [
+      instructed.amount,
+      instructed.currency,
+      settlement.amount,
+      settlement.currency,
+      rate,
+      source,
+      paymentId,
+    ]);
+
+    if (!result.rows[0]) {
+      throw new Error(`Payment not found: ${paymentId}`);
+    }
     return result.rows[0] as PaymentIntent;
   }
 

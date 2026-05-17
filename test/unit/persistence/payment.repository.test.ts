@@ -55,7 +55,8 @@ describe('PaymentRepository', () => {
       expect(db.query).toHaveBeenCalledTimes(1);
       const [sql, params] = (db.query as jest.Mock).mock.calls[0];
       expect(sql).toContain('INSERT INTO payments');
-      expect(params).toHaveLength(15);
+      // P01: insert now carries 15 legacy params + 15 ISO 20022 columns = 30
+      expect(params).toHaveLength(30);
       expect(params[0]).toBe('PMT-001');
     });
 
@@ -170,8 +171,9 @@ describe('PaymentRepository', () => {
       const result = await repo.updateRoute('PMT-001', 'SPEI', 'rule1', 'ROUTED');
       expect(result.destination_rail).toBe('SPEI');
 
+      // P01: now passes 5 params (5th is destination_institution_code, default null)
       const params = (db.query as jest.Mock).mock.calls[0][1];
-      expect(params).toEqual(['SPEI', 'rule1', 'ROUTED', 'PMT-001']);
+      expect(params).toEqual(['SPEI', 'rule1', 'ROUTED', 'PMT-001', null]);
     });
 
     it('throws when paymentId is empty', async () => {

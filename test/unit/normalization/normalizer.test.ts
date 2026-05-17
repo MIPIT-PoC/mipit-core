@@ -76,8 +76,9 @@ describe('Normalizer', () => {
       origin: { rail: 'PIX' },
     });
     const result = await normalizer.normalize(input);
-    expect(result.fx?.source_currency).toBe('BRL');
-    expect(result.fx?.target_currency).toBe('USD');
+    // P01/P05 ISO 20022 semantics: source=instruction (USD), target=rail-native (BRL for PIX)
+    expect(result.fx?.source_currency).toBe('USD');
+    expect(result.fx?.target_currency).toBe('BRL');
   });
 
   it('should not set FX target when currency matches local rail currency', async () => {
@@ -90,14 +91,14 @@ describe('Normalizer', () => {
   });
 
   it('should set FX for SPEI with non-MXN currency', async () => {
+    // P01/P05 ISO 20022: source=instruction (BRL), target=rail-native (MXN for SPEI)
     const input = makeCanonical({
       amount: { value: 100, currency: 'BRL' },
       origin: { rail: 'SPEI' },
-      fx: { source_currency: 'MXN' },
     });
     const result = await normalizer.normalize(input);
-    expect(result.fx?.source_currency).toBe('MXN');
-    expect(result.fx?.target_currency).toBe('BRL');
+    expect(result.fx?.source_currency).toBe('BRL');
+    expect(result.fx?.target_currency).toBe('MXN');
   });
 
   it('should populate missing msgId with generated value', async () => {

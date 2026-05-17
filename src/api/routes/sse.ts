@@ -34,11 +34,13 @@ export function broadcastPaymentEvent(event: {
   payment_id: string;
   status: string;
   previous_status?: string;
-  destination_rail?: string;
+  destination_rail?: string | null;
   origin_rail?: string;
   fx?: Record<string, unknown>;
   latency_ms?: number;
   error?: string;
+  /** P01: ISO 20022 TxSts code (ACSC/ACSP/RJCT/PART/PDNG). */
+  tx_sts?: string;
   timestamp: string;
 }): void {
   const data = JSON.stringify(event);

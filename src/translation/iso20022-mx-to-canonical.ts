@@ -4,14 +4,14 @@ import { TranslationError } from '../domain/errors/index.js';
 import { logger } from '../observability/logger.js';
 
 /**
- * ISO 20022 MX pacs.008.001.08 structured representation.
+ * ISO 20022 MX pacs.008.001.10 structured representation (P01 — bumped from .08).
  * This is the modern replacement for SWIFT MT103, used by:
  *   - SWIFT MX (ISO 20022 migration)
- *   - FedNow (as JSON)
+ *   - FedNow (uses .001.08; subset)
  *   - SEPA CT (as XML)
  *   - Many central bank RTGS systems
  *
- * Reference: ISO 20022 FIToFICustomerCreditTransfer (pacs.008.001.08)
+ * Reference: ISO 20022 FIToFICustomerCreditTransfer (pacs.008.001.10)
  */
 export interface Iso20022Pacs008 {
   /** Group Header */
@@ -21,7 +21,11 @@ export interface Iso20022Pacs008 {
     NbOfTxs: string;
     SttlmInf: {
       SttlmMtd: 'INDA' | 'INGA' | 'COVE' | 'CLRG';
+      /** P01: clearing system code (CBPR+) */
+      ClrSys?: { Cd?: string; Prtry?: string };
     };
+    /** P01: Initiating Party (CBPR+ optional) */
+    InitgPty?: { Nm?: string; Id?: { OrgId?: { Othr: { Id: string } } } };
     InstgAgt?: { FinInstnId: { BICFI?: string; ClrSysMmbId?: { MmbId: string } } };
     InstdAgt?: { FinInstnId: { BICFI?: string; ClrSysMmbId?: { MmbId: string } } };
   };
@@ -33,6 +37,8 @@ export interface Iso20022Pacs008 {
       InstrId?: string;
       EndToEndId: string;
       TxId?: string;
+      /** P01: UETR mandatory in pacs.008.001.10 */
+      UETR?: string;
     };
 
     /** Interbank Settlement Amount */
@@ -49,6 +55,9 @@ export interface Iso20022Pacs008 {
 
     /** Interbank Settlement Date */
     IntrBkSttlmDt?: string;
+
+    /** P01: Charge Bearer (mandatory in .001.10) */
+    ChrgBr?: 'DEBT' | 'CRED' | 'SHAR' | 'SLEV';
 
     /** Exchange Rate Information */
     XchgRate?: string;

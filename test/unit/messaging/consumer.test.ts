@@ -46,7 +46,9 @@ function buildMocks() {
   };
 
   const paymentRepo = {
-    updateAck: jest.fn().mockResolvedValue({}),
+    // P01: consumer now calls updateRailAck (returns full PaymentIntent for
+    // downstream destination_rail/metric labelling).
+    updateRailAck: jest.fn().mockResolvedValue({ destination_rail: 'SPEI' }),
   };
 
   const auditService = {
@@ -80,7 +82,11 @@ describe('AckConsumer', () => {
 
     await m.getCallback()(buildFakeMsg(buildAckMsg({ rail_ack: { status: 'ACCEPTED' } })));
 
-    expect(m.paymentRepo.updateAck).toHaveBeenCalledWith('PMT-TEST123', { status: 'ACCEPTED' }, PAYMENT_STATUS.COMPLETED);
+    expect(m.paymentRepo.updateRailAck).toHaveBeenCalledWith(
+      'PMT-TEST123',
+      expect.objectContaining({ status: 'ACCEPTED', tx_sts: 'ACSC' }),
+      PAYMENT_STATUS.COMPLETED,
+    );
   });
 
   it('should update payment to REJECTED on REJECTED ack', async () => {
@@ -90,9 +96,9 @@ describe('AckConsumer', () => {
 
     await m.getCallback()(buildFakeMsg(buildAckMsg({ rail_ack: { status: 'REJECTED', error: { code: 'R01', message: 'Insufficient funds' } } })));
 
-    expect(m.paymentRepo.updateAck).toHaveBeenCalledWith(
+    expect(m.paymentRepo.updateRailAck).toHaveBeenCalledWith(
       'PMT-TEST123',
-      expect.objectContaining({ status: 'REJECTED' }),
+      expect.objectContaining({ status: 'REJECTED', tx_sts: 'RJCT' }),
       PAYMENT_STATUS.REJECTED,
     );
   });
@@ -104,7 +110,11 @@ describe('AckConsumer', () => {
 
     await m.getCallback()(buildFakeMsg(buildAckMsg({ rail_ack: { status: 'ERROR' } })));
 
-    expect(m.paymentRepo.updateAck).toHaveBeenCalledWith('PMT-TEST123', { status: 'ERROR' }, PAYMENT_STATUS.FAILED);
+    expect(m.paymentRepo.updateRailAck).toHaveBeenCalledWith(
+      'PMT-TEST123',
+      expect.objectContaining({ status: 'ERROR', tx_sts: 'RJCT' }),
+      PAYMENT_STATUS.FAILED,
+    );
   });
 
   it('should log audit event with adapter and latency metadata', async () => {
@@ -143,12 +153,12 @@ describe('AckConsumer', () => {
     await m.getCallback()(badMsg);
 
     expect(m.channel.nack).toHaveBeenCalledWith(badMsg, false, false);
-    expect(m.paymentRepo.updateAck).not.toHaveBeenCalled();
+    expect(m.paymentRepo.updateRailAck).not.toHaveBeenCalled();
   });
 
   it('should nack without requeue when updateAck fails', async () => {
     const m = buildMocks();
-    m.paymentRepo.updateAck.mockRejectedValue(new Error('DB down'));
+    m.paymentRepo.updateRailAck.mockRejectedValue(new Error('DB down'));
     const consumer = new AckConsumer(m.channel as any, m.paymentRepo as any, m.auditService as any);
     await consumer.start();
 
@@ -167,7 +177,7 @@ describe('AckConsumer', () => {
     await m.getCallback()(msg);
 
     expect(m.channel.nack).toHaveBeenCalledWith(msg, false, false);
-    expect(m.paymentRepo.updateAck).not.toHaveBeenCalled();
+    expect(m.paymentRepo.updateRailAck).not.toHaveBeenCalled();
   });
 
   it('should return without processing when msg is null', async () => {
@@ -177,7 +187,7 @@ describe('AckConsumer', () => {
 
     await m.getCallback()(null);
 
-    expect(m.paymentRepo.updateAck).not.toHaveBeenCalled();
+    expect(m.paymentRepo.updateRailAck).not.toHaveBeenCalled();
     expect(m.channel.ack).not.toHaveBeenCalled();
   });
 

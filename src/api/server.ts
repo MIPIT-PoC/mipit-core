@@ -19,6 +19,7 @@ import { authMiddleware } from './middleware/auth.js';
 import { registerRateLimitMiddleware } from './middleware/rate-limit.js';
 import { registerSanitizationMiddleware } from './middleware/sanitize.js';
 import { logger } from '../observability/logger.js';
+import { env } from '../config/env.js';
 import type { PaymentPipeline } from '../pipeline/payment-pipeline.js';
 import type { PaymentRepository } from '../persistence/repositories/payment.repository.js';
 import type { AuditRepository } from '../persistence/repositories/audit.repository.js';
@@ -51,24 +52,49 @@ export async function buildServer(deps: ServerDeps) {
     logger: false,
     requestIdLogLabel: 'trace_id',
     bodyLimit: 1_048_576, // 1MB max body
+    // P08: trust X-Forwarded-* from upstream nginx so rate limiter sees real client IP.
+    trustProxy: true,
   });
 
-  await app.register(cors, { origin: true });
+  // P08: CORS with explicit allow-list (was `origin: true`).
+  const allowedOrigins = env.CORS_ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+  await app.register(cors, {
+    origin: (origin, cb) => {
+      // Same-origin requests / curl / server-to-server have no Origin header — allow.
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      logger.warn({ origin }, 'CORS: origin rejected');
+      cb(new Error('CORS: origin not allowed'), false);
+    },
+    credentials: false,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  });
   await app.register(helmet);
-  await app.register(fastifyJwt, { secret: deps.jwtSecret });
+
+  // P08: JWT with algorithm pinning + iss/aud verification.
+  await app.register(fastifyJwt, {
+    secret: deps.jwtSecret,
+    sign: {
+      algorithm: 'HS256',
+      iss: 'mipit-core',
+      aud: 'mipit-ui',
+      expiresIn: '24h',
+    },
+    verify: {
+      algorithms: ['HS256'],
+      allowedIss: 'mipit-core',
+      allowedAud: 'mipit-ui',
+      maxAge: '24h',
+    },
+  });
 
   // Security: HTTP rate limiting (before auth)
-  // Configurable via HTTP_RATE_LIMIT_MAX / HTTP_RATE_LIMIT_WINDOW_MS so the
-  // E2E + load suites can run higher volumes without colliding with the
-  // production default. Production env files keep the default (200/60s).
-  const httpRateLimitMax = Number(process.env.HTTP_RATE_LIMIT_MAX ?? '200');
-  const httpRateLimitWindowMs = Number(process.env.HTTP_RATE_LIMIT_WINDOW_MS ?? '60000');
   registerRateLimitMiddleware(app, {
-    maxRequests: httpRateLimitMax,
-    windowMs: httpRateLimitWindowMs,
+    maxRequests: env.HTTP_RATE_LIMIT_MAX,
+    windowMs: env.HTTP_RATE_LIMIT_WINDOW_MS,
   });
 
-  // Security: Input sanitization
+  // Security: Input sanitization (XSS + proto-pollution + size caps; no more regex-anti-SQL)
   registerSanitizationMiddleware(app);
 
   app.addHook('onRequest', tracingMiddleware);
@@ -79,16 +105,28 @@ export async function buildServer(deps: ServerDeps) {
   await app.register(healthRoutes);
   await app.register(metricsRoutes);
 
-  // SSE routes (no auth — UI subscribes directly)
+  // SSE routes — P08: token via query string verified internally (EventSource can't send headers)
   await app.register(registerSseRoutes);
 
-  // Demo token endpoint (PoC only — returns a JWT for the UI)
-  const tokenHandler = async (_req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
-    const token = app.jwt.sign({ sub: 'mipit-ui', role: 'admin' }, { expiresIn: '24h' });
-    return reply.send({ access_token: token, token_type: 'Bearer', expires_in: 86400 });
-  };
-  app.get('/auth/token', tokenHandler);
-  app.post('/auth/token', tokenHandler);
+  // P08: demo /auth/token endpoint gated to non-production.
+  if (env.NODE_ENV !== 'production') {
+    const tokenHandler = async (
+      _req: import('fastify').FastifyRequest,
+      reply: import('fastify').FastifyReply,
+    ) => {
+      const token = app.jwt.sign({ sub: 'mipit-ui', role: 'admin' });
+      return reply.send({ access_token: token, token_type: 'Bearer', expires_in: 86400 });
+    };
+    app.get('/auth/token', tokenHandler);
+    app.post('/auth/token', tokenHandler);
+  } else {
+    const denied = async (_req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
+      reply.code(404);
+      return { error: 'NOT_FOUND', message: '/auth/token is disabled in production. Use OIDC.' };
+    };
+    app.get('/auth/token', denied);
+    app.post('/auth/token', denied);
+  }
 
   // Authenticated routes
   await app.register(async (scoped) => {

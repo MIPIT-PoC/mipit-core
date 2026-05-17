@@ -1,26 +1,25 @@
 /**
- * Input Sanitization Middleware
+ * Input Sanitization Middleware (P08 — slimmed down).
  *
- * Validates and sanitizes incoming request bodies to prevent:
- *   - XSS (script injection in string fields)
- *   - SQL injection patterns
- *   - Oversized payloads
- *   - Prototype pollution
+ * Previously this middleware applied a regex-based "anti-SQL" filter that
+ * rejected legitimate payloads containing substrings like "update the form"
+ * (matched `update` + `form`). All DB queries are parameterized (verified
+ * in audit), so the SQL filter was theater + false-positive prone — removed.
  *
- * Applied as a Fastify preHandler hook on POST/PUT/PATCH routes.
+ * What remains:
+ *   - Prototype-pollution key block (`__proto__`, `constructor`, `prototype`)
+ *   - Conservative limits on string size (10KB) and array size (1000 elements)
+ *   - XSS pattern detection (script/javascript:/event handlers) on string values
  */
 
 import type { FastifyInstance } from 'fastify';
 import { logger } from '../../observability/logger.js';
 
-/** Patterns that indicate potential injection attacks */
-const DANGEROUS_PATTERNS = [
+/** Patterns indicating XSS attempts. */
+const XSS_PATTERNS = [
   /<script\b[^>]*>/i,
   /javascript:/i,
   /on\w+\s*=/i,
-  /(\b(union|select|insert|update|delete|drop|alter|exec|execute)\b.*\b(from|into|table|where)\b)/i,
-  /--\s/,        // SQL comment
-  /;\s*(drop|delete|update|insert)/i,
 ];
 
 /** Keys that could enable prototype pollution */
@@ -52,8 +51,8 @@ function sanitizeObject(obj: Record<string, unknown>, path: string): void {
     }
 
     if (typeof value === 'string') {
-      // Check for dangerous patterns
-      for (const pattern of DANGEROUS_PATTERNS) {
+      // XSS only — no more anti-SQL false positives
+      for (const pattern of XSS_PATTERNS) {
         if (pattern.test(value)) {
           throw new Error(`Potentially dangerous input detected in ${currentPath}`);
         }

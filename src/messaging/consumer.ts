@@ -6,19 +6,35 @@ import type { WebhookService } from '../webhooks/webhook.service.js';
 import { logger } from '../observability/logger.js';
 import { recordPayment } from '../observability/metrics.js';
 import { broadcastPaymentEvent } from '../api/routes/sse.js';
+import { legacyStatusToTxSts, type Pacs002TxStatus } from '../canonical/pacs002.schema.js';
 
+/**
+ * Legacy adapter ACK shape (PIX/SPEI/Bre-B currently emit this).
+ * P01: We add `txSts` ISO 20022 codes at the consumer; adapters continue
+ * to emit their legacy `rail_ack.status` for backward compatibility.
+ */
 interface PaymentAckMessage {
   payment_id: string;
   trace_id: string;
+  uetr?: string; // P01: optional now, mandatory once P02/P03/P04 land
   source_rail: string;
   adapter_id: string;
   instance_id: string;
   status: 'ACKED_BY_RAIL' | 'REJECTED' | 'FAILED';
   rail_ack: {
     rail_tx_id?: string;
-    status: 'ACCEPTED' | 'REJECTED' | 'ERROR';
+    status: 'ACCEPTED' | 'REJECTED' | 'ERROR' | 'PENDING';
     error?: { code: string; message: string };
     raw_response?: Record<string, unknown>;
+  };
+  /** Pacs.002-derived enriched ack shape — populated by P02/P03/P04 adapters. */
+  pacs002?: {
+    msgId: string;
+    orgnlMsgId: string;
+    orgnlEndToEndId: string;
+    orgnlUetr: string;
+    txSts: Pacs002TxStatus;
+    stsRsnInf?: { rsn: { cd?: string; prtry?: string }; addtlInf?: string[] };
   };
   latency_ms: number;
   processed_at: string;
@@ -53,20 +69,46 @@ export class AckConsumer {
         return;
       }
 
-      const log = logger.child({ payment_id: ack.payment_id, source_rail: ack.source_rail });
+      const log = logger.child({ payment_id: ack.payment_id, source_rail: ack.source_rail, uetr: ack.uetr });
 
       try {
+        // ISO 20022 TxSts (prefer the enriched pacs.002 shape if adapter sent it).
+        const txSts: Pacs002TxStatus = ack.pacs002?.txSts ?? legacyStatusToTxSts(ack.rail_ack.status);
+
         let finalStatus: string;
-        if (ack.rail_ack.status === 'ACCEPTED') {
-          finalStatus = PAYMENT_STATUS.COMPLETED;
-        } else if (ack.rail_ack.status === 'REJECTED') {
-          finalStatus = PAYMENT_STATUS.REJECTED;
-        } else {
-          finalStatus = PAYMENT_STATUS.FAILED;
+        switch (txSts) {
+          case 'ACSC':
+            finalStatus = PAYMENT_STATUS.COMPLETED;
+            break;
+          case 'ACSP':
+            finalStatus = PAYMENT_STATUS.ACKED_BY_RAIL;
+            break;
+          case 'RJCT':
+            // Differentiate transport-level error vs business rejection
+            finalStatus = ack.rail_ack.status === 'ERROR'
+              ? PAYMENT_STATUS.FAILED
+              : PAYMENT_STATUS.REJECTED;
+            break;
+          case 'PDNG':
+            finalStatus = PAYMENT_STATUS.QUEUED; // keep queued, await further ack
+            break;
+          case 'PART':
+            finalStatus = PAYMENT_STATUS.ACKED_BY_RAIL;
+            break;
+          default:
+            finalStatus = PAYMENT_STATUS.FAILED;
         }
 
-        const updatedPayment = await this.paymentRepo.updateRailAck(ack.payment_id, ack.rail_ack, finalStatus);
-        log.info({ final_status: finalStatus, latency_ms: ack.latency_ms }, 'Payment status updated from ACK');
+        // Persist rail_ack (enrich with ISO codes for downstream observability).
+        const enrichedRailAck = {
+          ...ack.rail_ack,
+          tx_sts: txSts,
+          orgnl_end_to_end_id: ack.pacs002?.orgnlEndToEndId,
+          orgnl_uetr: ack.pacs002?.orgnlUetr ?? ack.uetr,
+        };
+
+        const updatedPayment = await this.paymentRepo.updateRailAck(ack.payment_id, enrichedRailAck, finalStatus);
+        log.info({ final_status: finalStatus, tx_sts: txSts, latency_ms: ack.latency_ms }, 'Payment status updated from ACK');
 
         const actor = `adapter-${ack.source_rail.toLowerCase()}`;
         await this.auditService.log(
@@ -75,30 +117,36 @@ export class AckConsumer {
           actor,
           {
             rail_status: ack.rail_ack.status,
+            tx_sts: txSts,
             final_payment_status: finalStatus,
             adapter_id: ack.adapter_id,
             instance_id: ack.instance_id,
             latency_ms: ack.latency_ms,
             rail_tx_id: ack.rail_ack.rail_tx_id,
             error: ack.rail_ack.error,
+            uetr: ack.pacs002?.orgnlUetr ?? ack.uetr,
           },
           ack.trace_id,
         );
 
-        recordPayment(finalStatus, ack.source_rail, ack.source_rail === 'PIX' ? 'SPEI' : 'PIX');
+        // P06: read destination_rail from DB (was hard-coded to inverse of source).
+        const destRail = (updatedPayment as any).destination_rail ?? null;
+        recordPayment(finalStatus, ack.source_rail, destRail ?? 'UNKNOWN');
 
         // Broadcast SSE event for real-time UI
         broadcastPaymentEvent({
           payment_id: ack.payment_id,
           status: finalStatus,
           origin_rail: ack.source_rail,
+          destination_rail: destRail,
           latency_ms: ack.latency_ms,
           error: ack.rail_ack.error?.message,
+          tx_sts: txSts,
           timestamp: ack.processed_at,
         });
 
         // Fire webhooks for terminal status (COMPLETED / FAILED / REJECTED)
-        if (this.webhookService) {
+        if (this.webhookService && ['COMPLETED', 'FAILED', 'REJECTED'].includes(finalStatus)) {
           this.webhookService.fireForPayment(updatedPayment).catch((err) => {
             log.warn({ err }, 'Webhook delivery error (non-blocking)');
           });

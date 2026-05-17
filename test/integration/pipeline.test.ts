@@ -167,8 +167,9 @@ describe('PaymentPipeline (integration)', () => {
 
     await pipeline.execute(buildPixRequest(), {});
 
+    // P01: updateRoute now takes a 5th param (destination_institution_code, may be null)
     expect(m.paymentRepo.updateRoute).toHaveBeenCalledWith(
-      expect.stringMatching(/^PMT-/), 'SPEI', 'pix-key-to-spei', PAYMENT_STATUS.ROUTED,
+      expect.stringMatching(/^PMT-/), 'SPEI', 'pix-key-to-spei', PAYMENT_STATUS.ROUTED, null,
     );
   });
 

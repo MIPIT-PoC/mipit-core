@@ -53,7 +53,7 @@ describe('IdempotencyRepository', () => {
     expect(sql).toContain('expires_at > NOW()');
   });
 
-  it('insert passes 6 parameters including payment_id', async () => {
+  it('insert passes 7 parameters including payment_id and expires_at (P01 TTL fix)', async () => {
     (db.query as jest.Mock).mockResolvedValue({ rows: [] });
     const record: IdempotencyRecord = {
       idempotency_key: 'k1',
@@ -66,8 +66,11 @@ describe('IdempotencyRepository', () => {
     await repo.insert(record);
 
     const params = (db.query as jest.Mock).mock.calls[0][1] as unknown[];
-    expect(params).toHaveLength(6);
+    expect(params).toHaveLength(7);
     expect(params[1]).toBe('PMT-1');
+    // Last param is expires_at — should be an ISO string ~24h ahead
+    expect(typeof params[6]).toBe('string');
+    expect(new Date(params[6] as string).getTime()).toBeGreaterThan(Date.now());
   });
 
   it('insert serializes response_body as JSON', async () => {
@@ -125,7 +128,7 @@ describe('IdempotencyRepository', () => {
       created_at: '2025-01-01T00:00:00Z',
     });
     expect(logger.debug).toHaveBeenCalledWith(
-      { idempotency_key: 'k1', payment_id: 'PMT-1' },
+      expect.objectContaining({ idempotency_key: 'k1', payment_id: 'PMT-1', expires_at: expect.any(String) }),
       'Idempotency key inserted',
     );
 

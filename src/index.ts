@@ -3,6 +3,7 @@ import { initTelemetry } from './observability/otel.js';
 const sdk = initTelemetry();
 
 import { buildServer } from './api/server.js';
+import { setHealthDeps } from './api/routes/health.js';
 import { connectDb } from './persistence/db.js';
 import { env } from './config/env.js';
 import { logger } from './observability/logger.js';
@@ -81,6 +82,9 @@ async function main() {
     auditService,
     logger,
   );
+
+  // P08: provide DB + channel to /health endpoint for deep probe
+  setHealthDeps({ db, channel });
 
   const app = await buildServer({
     db,

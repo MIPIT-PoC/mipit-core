@@ -2,7 +2,7 @@ import { diag, DiagConsoleLogger, DiagLogLevel } from '@opentelemetry/api';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { Resource } from '@opentelemetry/resources';
+import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 import { env } from '../config/env.js';
 
@@ -10,7 +10,8 @@ if (env.LOG_LEVEL === 'debug' || env.LOG_LEVEL === 'trace') {
   diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.INFO);
 }
 
-const resource = new Resource({
+// P08: align with OTel SDK ≥0.218 — Resource is now built via resourceFromAttributes()
+const resource = resourceFromAttributes({
   [ATTR_SERVICE_NAME]: env.OTEL_SERVICE_NAME,
   [ATTR_SERVICE_VERSION]: '0.1.0',
 });
