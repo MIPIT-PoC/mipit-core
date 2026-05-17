@@ -112,6 +112,18 @@ export class PaymentPipeline {
         },
       };
 
+      // P02 — Persist the canonical EndToEndId into the dedicated DB column
+      // so it's queryable without diving into the JSONB. Bounded to 35 chars
+      // per ISO 20022 spec (DB column is VARCHAR(35)).
+      try {
+        const e2e = canonical.pmtId.endToEndId?.slice(0, 35);
+        if (e2e) {
+          await this.paymentRepo.updateEndToEndId(paymentId, e2e);
+        }
+      } catch (err) {
+        log.warn({ err }, 'updateEndToEndId failed (non-fatal)');
+      }
+
       await this.paymentRepo.updateCanonical(paymentId, canonical, PAYMENT_STATUS.CANONICALIZED);
       await this.auditService.log(paymentId, 'CANONICAL_UPDATED', 'system-translator', {
         pacs008_version: 'pacs.008.001.10-derived',

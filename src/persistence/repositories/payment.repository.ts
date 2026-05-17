@@ -178,6 +178,17 @@ export class PaymentRepository {
   }
 
   /**
+   * P02 — Persist the canonical EndToEndId into the dedicated DB column.
+   * Bounded to 35 chars per ISO 20022 spec.
+   */
+  async updateEndToEndId(paymentId: string, endToEndId: string): Promise<void> {
+    await this.db.query(
+      `UPDATE payments SET end_to_end_id = $1 WHERE payment_id = $2`,
+      [endToEndId.slice(0, 35), paymentId],
+    );
+  }
+
+  /**
    * Persist FX results + instructed/settlement amounts (P01 + P05).
    */
   async updateFxAndSettlement(

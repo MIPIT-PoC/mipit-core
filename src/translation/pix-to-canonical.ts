@@ -98,6 +98,10 @@ interface NativePixPayload {
   tipoChave?: string;
   tipo?: string;
   campoLivre?: string;
+  /** P02: BACEN-mandated completion timestamp. Must round-trip through canonical. */
+  horario?: string;
+  /** Alternate name some PSPs use for the timestamp. */
+  dataHora?: string;
 }
 
 /**
@@ -119,10 +123,14 @@ export async function pixToCanonical(
     const amount = parseFloat(native.valor?.original ?? '0');
     const chave = native.chave ?? '';
     const e2eId = native.endToEndId ?? `E2E-${ulid()}`;
+    // P02: preserve BACEN `horario` (completion timestamp) as the canonical
+    // creation time. Falls back to `dataHora` (alternate PSP name) and then
+    // to current UTC. The normalizer (P02) won't clobber a valid ISO 8601 value.
+    const completionTime = native.horario ?? native.dataHora ?? now;
     const raw: Record<string, unknown> = {
       payment_id: paymentId,
-      created_at: now,
-      grpHdr: { msgId: e2eId, creDtTm: now, nbOfTxs: 1 },
+      created_at: completionTime,
+      grpHdr: { msgId: e2eId, creDtTm: completionTime, nbOfTxs: 1 },
       pmtId: { endToEndId: e2eId.slice(0, 35) },
       amount: { value: amount, currency: 'BRL' },
       fx: { source_currency: 'BRL' },

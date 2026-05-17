@@ -135,11 +135,14 @@ export const QUEUES = {
 /** Maximum retries before sending to DLQ */
 export const DLQ_MAX_RETRIES = 3;
 
-/** SPEI operating hours (CST = UTC-6) */
+/** Rail operating hours (Wave 2 P02/P03/P04 corrections) */
 export const RAIL_OPERATING_HOURS: Record<string, { days: number[]; startHhmm: number; endHhmm: number; tz: number }> = {
-  PIX:  { days: [1, 2, 3, 4, 5, 6], startHhmm: 700, endHhmm: 2359, tz: -3 },
-  SPEI: { days: [1, 2, 3, 4, 5], startHhmm: 700, endHhmm: 1730, tz: -6 },
-  BRE_B: { days: [1, 2, 3, 4, 5], startHhmm: 600, endHhmm: 2200, tz: -5 },
+  // P02: PIX is 24/7/365 (BACEN Resolução 1/2020 art. 24).
+  PIX:  { days: [0, 1, 2, 3, 4, 5, 6], startHhmm: 0, endHhmm: 2400, tz: -3 },
+  // P03: SPEI M-F 06:00-17:55 CT (Banxico Circular 14/2017, settlement to 18:00).
+  SPEI: { days: [1, 2, 3, 4, 5], startHhmm: 600, endHhmm: 1755, tz: -6 },
+  // P04: Bre-B is 24/7/365 per BanRep launch (2025).
+  BRE_B: { days: [0, 1, 2, 3, 4, 5, 6], startHhmm: 0, endHhmm: 2400, tz: -5 },
 };
 
 /** Rate limit configuration per rail (requests per minute) */
