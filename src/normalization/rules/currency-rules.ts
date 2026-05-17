@@ -4,7 +4,7 @@ import { getFxService } from '../../fx/fx-service.js';
 import { logger } from '../../observability/logger.js';
 
 /** Native (local) currency for each supported rail */
-const RAIL_LOCAL_CURRENCY: Record<string, string> = {
+export const RAIL_LOCAL_CURRENCY: Record<string, string> = {
   PIX:         'BRL',
   SPEI:        'MXN',
   BRE_B:       'COP',
@@ -18,11 +18,19 @@ const RAIL_LOCAL_CURRENCY: Record<string, string> = {
  * Normalizes currency and applies real-time FX conversion when the payment
  * crosses currency zones (e.g. PIX BRL → SPEI MXN, PIX BRL → BRE_B COP).
  *
+ * P05: When `canonical.destination.rail` is set (post-routing call), uses the
+ * destination's native currency as the target. Otherwise falls back to the
+ * origin's native (legacy pre-route call — usually a no-op since the input
+ * arrives in origin's currency).
+ *
  * Accepts an optional injected FxService for testability; falls back to singleton.
  */
 export async function normalizeCurrency(canonical: CanonicalPacs008, injectedFxService?: FxService): Promise<CanonicalPacs008> {
   const uppercaseCurrency = canonical.amount.currency.toUpperCase();
-  const localCurrency = RAIL_LOCAL_CURRENCY[canonical.origin.rail];
+  // P05 — prefer destination rail when known (post-route call); fall back to origin.
+  const destRail = canonical.destination?.rail;
+  const localCurrency = (destRail && RAIL_LOCAL_CURRENCY[destRail])
+    ?? RAIL_LOCAL_CURRENCY[canonical.origin.rail];
 
   // Always uppercase the currency code
   let result: CanonicalPacs008 = {

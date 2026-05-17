@@ -1,6 +1,25 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { circuitBreakerRegistry } from '../../resilience/circuit-breaker.js';
+import { logger } from '../../observability/logger.js';
 
 type Rail = 'PIX' | 'SPEI' | 'BRE_B';
+
+/**
+ * P06 — Circuit breakers per rail-adapter HTTP call. Was previously dead
+ * code (`execute` never invoked). Uses the shared CircuitBreakerRegistry so
+ * the `/analytics/circuit-breakers` endpoint surfaces their state.
+ */
+const BREAKER_OPTS = { failureThreshold: 5, cooldownMs: 30_000, windowMs: 60_000 };
+
+async function fetchWithBreaker(rail: string, url: string, init?: RequestInit): Promise<Response> {
+  const breaker = circuitBreakerRegistry.get(`adapter-${rail.toLowerCase()}-http`, BREAKER_OPTS);
+  try {
+    return await breaker.execute(() => fetch(url, init));
+  } catch (err) {
+    logger.warn({ rail, url, err: String(err) }, 'ui-proxy fetch blocked by circuit breaker');
+    throw err;
+  }
+}
 
 type RailTargets = {
   healthUrl: string;
@@ -77,7 +96,7 @@ export async function registerUiProxyRoutes(app: FastifyInstance) {
     async (req, reply) => {
       try {
         const targets = getRailTargets(req.params.rail);
-        const upstream = await fetch(targets.healthUrl);
+        const upstream = await fetchWithBreaker(req.params.rail, targets.healthUrl);
         return sendUpstream(reply, upstream);
       } catch (error) {
         req.log.warn({ err: error, rail: req.params.rail }, 'UI proxy health request failed');
@@ -94,7 +113,7 @@ export async function registerUiProxyRoutes(app: FastifyInstance) {
     async (req, reply) => {
       try {
         const targets = getRailTargets(req.params.rail);
-        const upstream = await fetch(joinUrl(targets.mockBaseUrl, '/health'));
+        const upstream = await fetchWithBreaker(req.params.rail, joinUrl(targets.mockBaseUrl, '/health'));
         return sendUpstream(reply, upstream);
       } catch (error) {
         req.log.warn({ err: error, rail: req.params.rail }, 'UI proxy mock health request failed');
@@ -111,7 +130,7 @@ export async function registerUiProxyRoutes(app: FastifyInstance) {
     async (req, reply) => {
       try {
         const targets = getRailTargets(req.params.rail);
-        const upstream = await fetch(joinUrl(targets.mockBaseUrl, '/admin/stats'));
+        const upstream = await fetchWithBreaker(req.params.rail, joinUrl(targets.mockBaseUrl, '/admin/stats'));
         return sendUpstream(reply, upstream);
       } catch (error) {
         req.log.warn({ err: error, rail: req.params.rail }, 'UI proxy mock stats request failed');
@@ -128,7 +147,7 @@ export async function registerUiProxyRoutes(app: FastifyInstance) {
     async (req, reply) => {
       try {
         const targets = getRailTargets(req.params.rail);
-        const upstream = await fetch(joinUrl(targets.mockBaseUrl, '/admin/config'));
+        const upstream = await fetchWithBreaker(req.params.rail, joinUrl(targets.mockBaseUrl, '/admin/config'));
         return sendUpstream(reply, upstream);
       } catch (error) {
         req.log.warn({ err: error, rail: req.params.rail }, 'UI proxy mock config request failed');
@@ -145,7 +164,7 @@ export async function registerUiProxyRoutes(app: FastifyInstance) {
     async (req, reply) => {
       try {
         const targets = getRailTargets(req.params.rail);
-        const upstream = await fetch(joinUrl(targets.mockBaseUrl, '/admin/config'), {
+        const upstream = await fetchWithBreaker(req.params.rail, joinUrl(targets.mockBaseUrl, '/admin/config'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(req.body ?? {}),
@@ -165,7 +184,7 @@ export async function registerUiProxyRoutes(app: FastifyInstance) {
     app.post<{ Params: { rail: string } }>(`/mocks/:rail/admin/${action}`, async (req, reply) => {
       try {
         const targets = getRailTargets(req.params.rail);
-        const upstream = await fetch(joinUrl(targets.mockBaseUrl, `/admin/${action}`), {
+        const upstream = await fetchWithBreaker(req.params.rail, joinUrl(targets.mockBaseUrl, `/admin/${action}`), {
           method: 'POST',
         });
         return sendUpstream(reply, upstream);

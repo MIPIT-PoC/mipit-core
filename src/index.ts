@@ -55,6 +55,21 @@ async function main() {
   const paymentRepo = new PaymentRepository(db);
   const auditRepo = new AuditRepository(db);
   const idempotencyRepo = new IdempotencyRepository(db);
+
+  // P06 — Background sweeper: purge expired idempotency claims every hour.
+  // Uses the sweep_expired_idempotency_keys() SQL function from migration 011.
+  const sweepInterval = setInterval(async () => {
+    try {
+      const r = await db.query('SELECT sweep_expired_idempotency_keys() AS deleted');
+      const deleted = (r.rows[0] as { deleted: number }).deleted;
+      if (deleted > 0) {
+        logger.info({ deleted }, 'Idempotency sweeper purged expired claims');
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Idempotency sweeper failed (non-fatal)');
+    }
+  }, 60 * 60 * 1000);
+  if (typeof sweepInterval.unref === 'function') sweepInterval.unref();
   const mappingRepo = new MappingRepository(db);
   const routeRuleRepo = new RouteRuleRepository(db);
   const webhookRepo = new WebhookRepository(db);
@@ -67,7 +82,8 @@ async function main() {
   const normalizer = new Normalizer(fxService);
   const ruleLoader = new RuleLoader(routeRuleRepo);
   const routeEngine = new RouteEngine(ruleLoader);
-  const publisher = new Publisher(channel);
+  // P06 — channel is a ConfirmChannel (see reconnect.useConfirmChannel default).
+  const publisher = new Publisher(channel as any);
   const rateLimiter = new RateLimiter();
 
   const compensationService = new CompensationService(paymentRepo, auditService);
@@ -81,6 +97,7 @@ async function main() {
     paymentRepo,
     auditService,
     logger,
+    rateLimiter, // P06 — wire the rate limiter (was dead code)
   );
 
   // P08: provide DB + channel to /health endpoint for deep probe
@@ -103,12 +120,24 @@ async function main() {
     rateLimiter,
   });
 
-  // Start ACK consumer
+  // P06 — Register consumer bootstraps with the reconnector so they re-attach
+  // on every reconnect. Otherwise consumers stay bound to a dead channel and
+  // ACKs accumulate invisibly post-blip.
+  reconnector.registerConsumerBootstrap(async (ch) => {
+    const consumer = new AckConsumer(ch, paymentRepo, auditService, webhookService);
+    await consumer.start();
+  });
+  reconnector.registerConsumerBootstrap(async (ch) => {
+    const dlq = new DlqHandler(ch, paymentRepo, auditService);
+    await dlq.start();
+  });
+
+  // Start consumers on the initial channel (the bootstraps will fire again
+  // automatically on reconnect via reconnector.scheduleReconnect).
   const ackConsumer = new AckConsumer(channel, paymentRepo, auditService, webhookService);
   await ackConsumer.start();
   logger.info('AckConsumer started and listening for ACK messages');
 
-  // Start DLQ handler
   const dlqHandler = new DlqHandler(channel, paymentRepo, auditService);
   await dlqHandler.start();
   logger.info('DLQ handler started — processing dead-lettered payments');
@@ -131,6 +160,7 @@ async function main() {
   const shutdown = async () => {
     logger.info('Shutting down gracefully...');
     clearInterval(reconInterval);
+    clearInterval(sweepInterval);
     await app.close();
     await channel.close();
     await connection.close();

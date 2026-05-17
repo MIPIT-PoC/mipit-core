@@ -19,9 +19,23 @@
  */
 
 import { logger } from '../observability/logger.js';
+import { roundToCurrency } from './currency-metadata.js';
 
 const SUPPORTED_CURRENCIES = ['USD', 'BRL', 'MXN', 'COP', 'EUR'] as const;
 type SupportedCurrency = typeof SUPPORTED_CURRENCIES[number];
+
+/**
+ * P05 — Thrown when a currency conversion cannot be performed safely
+ * (unknown currency, API failure with no fallback, etc.). Previously the
+ * service silently fell back to rate=1 which produced 1:1 conversion
+ * (e.g. 100 EUR → 100 USD), corrupting amounts at the boundary.
+ */
+export class FxError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FxError';
+  }
+}
 
 interface ExchangeRates {
   /** timestamp of when rates were fetched */
@@ -51,16 +65,25 @@ export class FxService {
 
   /**
    * Returns the conversion rate from sourceCurrency to targetCurrency.
-   * Uses cached rates when available and fresh.
+   * P05: throws FxError for unknown currencies (was silently returning 1).
    *
    * Example: getRate('BRL', 'USD') → 0.199  (1 BRL = 0.199 USD)
    */
   async getRate(source: string, target: string): Promise<number> {
-    if (source === target) return 1;
+    const src = source.toUpperCase();
+    const tgt = target.toUpperCase();
+    if (src === tgt) return 1;
 
     const rates = await this.getRates();
-    const srcRate = rates[source as SupportedCurrency] ?? 1;
-    const tgtRate = rates[target as SupportedCurrency] ?? 1;
+    const srcRate = rates[src as SupportedCurrency];
+    const tgtRate = rates[tgt as SupportedCurrency];
+
+    if (srcRate === undefined) {
+      throw new FxError(`Unknown source currency: ${src}`);
+    }
+    if (tgtRate === undefined) {
+      throw new FxError(`Unknown target currency: ${tgt}`);
+    }
 
     // Convert via USD: amount_src / rate_src * rate_tgt
     return tgtRate / srcRate;
@@ -68,12 +91,11 @@ export class FxService {
 
   /**
    * Converts an amount from one currency to another.
+   * P05: per-currency precision via roundToCurrency (was hard-coded 2 decimals).
    */
   async convert(amount: number, from: string, to: string): Promise<number> {
     const rate = await this.getRate(from, to);
-    const converted = amount * rate;
-    // Round to 2 decimal places
-    return Math.round(converted * 100) / 100;
+    return roundToCurrency(amount * rate, to);
   }
 
   /** Returns all rates, fetching from API if cache is stale */

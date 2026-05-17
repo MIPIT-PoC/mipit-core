@@ -28,7 +28,12 @@ export interface ReconciliationOptions {
 }
 
 export interface ReconciliationReport {
-  generated_at: string;
+  generated_at?: string;
+  /** P06: present when the overlap guard skipped this run. */
+  run_id?: string;
+  run_at?: string;
+  payments_scanned?: number;
+  skipped?: boolean;
   window_hours: number;
   summary: {
     total_payments: number;
@@ -68,14 +73,33 @@ const DEFAULT_OPTIONS: ReconciliationOptions = {
 };
 
 export class ReconciliationService {
+  /** P06 — overlap guard so a slow reconciliation doesn't race with the next scheduled run. */
+  private running = false;
+
   constructor(
     private readonly paymentRepo: PaymentRepository,
     _auditService: AuditService,
   ) {}
 
   async runReconciliation(options?: Partial<ReconciliationOptions>): Promise<ReconciliationReport> {
-    const opts = { ...DEFAULT_OPTIONS, ...options };
     const log = logger.child({ component: 'reconciliation' });
+
+    if (this.running) {
+      log.warn('Reconciliation already running — skipping this scheduled run');
+      return {
+        generated_at: new Date().toISOString(),
+        window_hours: options?.windowHours ?? DEFAULT_OPTIONS.windowHours,
+        summary: { total_payments: 0, completed: 0, failed: 0, rejected: 0, stuck_in_queue: 0, dead_letter: 0, compensated: 0 },
+        stuck_payments: [],
+        rail_breakdown: {},
+        anomalies: [],
+        skipped: true,
+      };
+    }
+    this.running = true;
+    try {
+
+    const opts = { ...DEFAULT_OPTIONS, ...options };
     log.info({ windowHours: opts.windowHours }, 'Starting reconciliation');
 
     const cutoff = new Date(Date.now() - opts.windowHours * 60 * 60 * 1000).toISOString();
@@ -205,5 +229,9 @@ export class ReconciliationService {
 
     log.info({ summary, anomalies: anomalies.length }, 'Reconciliation complete');
     return report;
+    } finally {
+      // P06 — Always release the overlap guard, even on error.
+      this.running = false;
+    }
   }
 }

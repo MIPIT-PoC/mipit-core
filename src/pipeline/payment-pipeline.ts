@@ -12,6 +12,7 @@ import type { AuditService } from '../audit/audit-service.js';
 import type { Logger } from 'pino';
 import { startLatencyTimer } from '../observability/metrics.js';
 import { broadcastPaymentEvent } from '../api/routes/sse.js';
+import type { RateLimiter } from '../resilience/rate-limiter.js';
 
 export class PaymentPipeline {
   constructor(
@@ -22,6 +23,8 @@ export class PaymentPipeline {
     private readonly paymentRepo: PaymentRepository,
     private readonly auditService: AuditService,
     private readonly logger: Logger,
+    /** P06 — optional rate limiter; consumed in step 6 (route) per destination rail. */
+    private readonly rateLimiter?: RateLimiter,
   ) {}
 
   async execute(
@@ -159,6 +162,38 @@ export class PaymentPipeline {
       const stopRouting = startLatencyTimer('pipeline_routing');
       const route = await this.routeEngine.resolve(normalized);
       stopRouting();
+
+      // P06 — Consume one token from the destination-rail rate limiter.
+      // Throws RateLimitExceededError (caught by the HTTP error handler and
+      // returned as 429 with Retry-After). Previously `acquire` was dead code.
+      if (this.rateLimiter) {
+        try {
+          this.rateLimiter.acquire(route.destination);
+        } catch (err) {
+          log.warn({ err, rail: route.destination }, 'Rate limit exceeded — rejecting');
+          throw err;
+        }
+      }
+
+      // P05 — Re-normalize with destination_rail known so FX targets the
+      // destination's native currency (was using origin's, which is a no-op
+      // for cross-border flows like BRL→MXN).
+      normalized.destination = {
+        ...(normalized.destination ?? {}),
+        rail: route.destination as any,
+      };
+      const stopReNormalize = startLatencyTimer('pipeline_normalization');
+      const reNormalized = await this.normalizer.normalize(normalized);
+      stopReNormalize();
+      // Copy fx + amount back onto the canonical we publish + persist.
+      if (reNormalized.fx) normalized.fx = reNormalized.fx;
+      // Persist the updated canonical (now with FX info) before publishing.
+      try {
+        await this.paymentRepo.updateCanonical(paymentId, normalized, PAYMENT_STATUS.ROUTED);
+      } catch (err) {
+        log.warn({ err }, 'Failed to persist post-route canonical (FX info); continuing');
+      }
+
       await this.paymentRepo.updateRoute(
         paymentId,
         route.destination,
