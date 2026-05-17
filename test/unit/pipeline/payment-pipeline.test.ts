@@ -129,7 +129,9 @@ describe('PaymentPipeline', () => {
     );
 
     await pipeline.execute(buildRequest(), {});
-    expect(m.normalizer.normalize).toHaveBeenCalledTimes(1);
+    // P05: pipeline normalizes twice — once pre-route, then again post-route
+    // with destination_rail set (so FX targets the destination's native currency).
+    expect(m.normalizer.normalize).toHaveBeenCalledTimes(2);
   });
 
   it('should call routeEngine.resolve and publisher.publishToAdapter', async () => {
