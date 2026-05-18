@@ -2,6 +2,7 @@ import { type CanonicalPacs008 } from '../domain/models/canonical.js';
 import { TranslationError } from '../domain/errors/index.js';
 import { logger } from '../observability/logger.js';
 import { generateBrebTransactionId, BREB_ENTITY_CODES, type BreBPaymentRequest } from './breb-to-canonical.js';
+import { formatAmount } from '../fx/currency-metadata.js';
 
 /**
  * Translates a canonical pacs.008 model to a Bre-B payment request.
@@ -44,10 +45,14 @@ export async function canonicalToBreb(
 
     const idTransaccion = generateBrebTransactionId(pagadorEntidad);
 
+    // W5.10 — COP must be sent as integer (no centavos) per Bre-B TR-002 §5.
+    // If FX was applied (cross-currency BRL→COP, MXN→COP), prefer the settled
+    // local_amount; otherwise use the canonical amount (assumed COP-native).
+    const brebAmount = canonical.fx?.local_amount ?? canonical.amount.value;
     const request: BreBPaymentRequest = {
       idTransaccion,
       valor: {
-        original: canonical.amount.value.toFixed(2),
+        original: formatAmount(brebAmount, 'COP'),
       },
       pagador: {
         codigoEntidad: pagadorEntidad,

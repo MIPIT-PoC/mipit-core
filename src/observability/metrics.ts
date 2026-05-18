@@ -15,7 +15,10 @@ export const paymentLatency = new client.Histogram({
   name: 'mipit_payment_latency_ms',
   help: 'Payment processing latency in milliseconds by stage',
   labelNames: ['stage'],
-  buckets: [5, 10, 25, 50, 100, 250, 500, 1000, 2500],
+  // W5.5 — extended to cap at 30s so p99 doesn't saturate to +Inf when a stage
+  // is slow. Granular at the low end (10/25/50/100) for sub-second pipeline stages
+  // and at the high end (10000/30000) so HighLatency alert (>10s) actually fires.
+  buckets: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000],
   registers: [registry],
 });
 

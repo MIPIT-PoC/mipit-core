@@ -9,9 +9,14 @@ function isValidCLABE(clabe: string): boolean {
   return parseInt(clabe[17], 10) === (10 - (sum % 10)) % 10;
 }
 
-/** Validates a Colombia phone key: +57 followed by exactly 10 digits */
+/**
+ * Validates a Colombia mobile phone key per BanRep TR-002 (mobile-only): +57
+ * followed by `3` and exactly 9 more digits. W5.11 — previously accepted
+ * landlines `+571xxx`, which the Bre-B mock then rejected, causing a 400
+ * after the core had already inferred BRE_B.
+ */
 function isValidColombiaPhone(phone: string): boolean {
-  return /^\+57\d{10}$/.test(phone);
+  return /^\+573\d{9}$/.test(phone);
 }
 
 /** Validates a Colombia NIT key: 9-10 digits, dash, 1 digit */

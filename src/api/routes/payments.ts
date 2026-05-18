@@ -120,6 +120,7 @@ export async function paymentRoutes(app: FastifyInstance, deps: ServerDeps) {
 
       const auditEvents = await auditRepo.findByPaymentId(paymentId);
 
+      const p = payment as unknown as Record<string, unknown>;
       return reply.send({
         payment_id: payment.payment_id,
         status: payment.status,
@@ -131,6 +132,19 @@ export async function paymentRoutes(app: FastifyInstance, deps: ServerDeps) {
         creditor: { alias: payment.creditor_alias, name: payment.creditor_name },
         purpose: payment.purpose,
         reference: payment.reference,
+        // W5.1 — surface ISO 20022 + FX fields that the UI's PaymentDetail type
+        // already declares but the API never returned. Columns exist on the
+        // payments table (added by Wave 1 migration 008 and Wave 3 P05).
+        uetr: p.uetr ?? null,
+        end_to_end_id: p.end_to_end_id ?? null,
+        charge_bearer: p.charge_bearer ?? null,
+        interbank_settlement_date: p.interbank_settlement_date ?? null,
+        instructed_amount: p.instructed_amount ?? null,
+        instructed_currency: p.instructed_currency ?? null,
+        settlement_amount: p.settlement_amount ?? null,
+        settlement_currency: p.settlement_currency ?? null,
+        exchange_rate: p.exchange_rate ?? null,
+        exchange_rate_source: p.exchange_rate_source ?? null,
         original_payload: payment.origin_payload,
         canonical_payload: payment.canonical_payload ?? null,
         translated_payload: payment.translated_payload ?? null,
@@ -146,6 +160,10 @@ export async function paymentRoutes(app: FastifyInstance, deps: ServerDeps) {
           sent_at: payment.sent_at ?? null,
           acked_at: payment.acked_at ?? null,
           completed_at: payment.completed_at ?? null,
+          // W5.1 — surface terminal timestamps that previously were hidden
+          failed_at: (p.failed_at as string | null | undefined) ?? null,
+          compensated_at: (p.compensated_at as string | null | undefined) ?? null,
+          dead_letter_at: (p.dead_letter_at as string | null | undefined) ?? null,
         },
         audit_trail: auditEvents.map((e) => ({
           id: e.id,

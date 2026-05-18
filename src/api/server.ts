@@ -9,6 +9,7 @@ import { healthRoutes } from './routes/health.js';
 import { metricsRoutes } from './routes/metrics.js';
 import { translateRoutes } from './routes/translate.js';
 import { registerSseRoutes } from './routes/sse.js';
+import { registerWebhookRoutes } from './routes/webhooks.js';
 import { registerAnalyticsRoutes } from './routes/analytics.js';
 import { registerUiProxyRoutes } from './routes/ui-proxy.js';
 import type { Translator } from '../translation/translator.js';
@@ -107,6 +108,8 @@ export async function buildServer(deps: ServerDeps) {
 
   // SSE routes — P08: token via query string verified internally (EventSource can't send headers)
   await app.register(registerSseRoutes);
+  // W5.2 — public webhook endpoint for AlertManager (machine-to-machine, no JWT)
+  await app.register(registerWebhookRoutes);
 
   // P08: demo /auth/token endpoint gated to non-production.
   if (env.NODE_ENV !== 'production') {
@@ -142,7 +145,7 @@ export async function buildServer(deps: ServerDeps) {
     await registerCompensationRoutes(scoped, deps);
   });
 
-  logger.info('Fastify server built — routes: health, metrics, sse, payments, translate, analytics, compensation');
+  logger.info('Fastify server built — routes: health, metrics, sse, webhooks, payments, translate, analytics, compensation');
 
   return app;
 }
