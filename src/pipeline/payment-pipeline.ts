@@ -108,6 +108,18 @@ export class PaymentPipeline {
         ...canonicalRaw,
         chrgBr: chargeBearer,
         intrBkSttlmDt,
+        // W6.5 — pacs.008.001.10 mandates `GrpHdr.NbOfTxs [1..1]`, and CBPR+
+        // §4.2.1 obliges CtrlSum + TtlIntrBkSttlmAmt for batch auditing. Always
+        // 1 here because MIPIT processes a single CdtTrfTxInf per pacs.008.
+        grpHdr: {
+          ...canonicalRaw.grpHdr,
+          nbOfTxs: 1,
+          ctrlSum: canonicalRaw.amount.value,
+          ttlIntrBkSttlmAmt: canonicalRaw.grpHdr?.ttlIntrBkSttlmAmt ?? {
+            value: canonicalRaw.amount.value,
+            currency: canonicalRaw.amount.currency,
+          },
+        },
         pmtId: {
           ...existingPmtId,
           uetr,

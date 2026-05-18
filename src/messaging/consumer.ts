@@ -7,6 +7,7 @@ import { logger } from '../observability/logger.js';
 import { recordPayment } from '../observability/metrics.js';
 import { broadcastPaymentEvent } from '../api/routes/sse.js';
 import { legacyStatusToTxSts, type Pacs002TxStatus } from '../canonical/pacs002.schema.js';
+import { mapRailRejectionToIso } from '../translation/rail-rejection-mapping.js';
 
 /**
  * Legacy adapter ACK shape (PIX/SPEI/Bre-B currently emit this).
@@ -99,12 +100,24 @@ export class AckConsumer {
             finalStatus = PAYMENT_STATUS.FAILED;
         }
 
+        // W6.2 — when the rail rejected, map its proprietary code to an ISO
+        // ExternalStatusReason1Code (Rsn.Cd) while preserving the original
+        // in Rsn.Prtry. Lets downstream pacs.002 readers route on standard
+        // codes without losing audit trail of the rail-native code.
+        const isoReason = (txSts === 'RJCT' && (ack.source_rail === 'PIX' || ack.source_rail === 'SPEI' || ack.source_rail === 'BRE_B'))
+          ? mapRailRejectionToIso(ack.source_rail, ack.rail_ack.error?.code)
+          : undefined;
+
         // Persist rail_ack (enrich with ISO codes for downstream observability).
         const enrichedRailAck = {
           ...ack.rail_ack,
           tx_sts: txSts,
           orgnl_end_to_end_id: ack.pacs002?.orgnlEndToEndId,
           orgnl_uetr: ack.pacs002?.orgnlUetr ?? ack.uetr,
+          // ISO rejection reason (W6.2) — added on top of error.code (preserved).
+          sts_rsn_inf: isoReason
+            ? { rsn: { cd: isoReason.cd, prtry: isoReason.prtry } }
+            : ack.pacs002?.stsRsnInf,
         };
 
         const updatedPayment = await this.paymentRepo.updateRailAck(ack.payment_id, enrichedRailAck, finalStatus);

@@ -237,4 +237,40 @@ describe('serializeAchNacha', () => {
     const amountField = entryLine!.substring(29, 39);
     expect(amountField).toBe('0000150000');
   });
+
+  // W6.11 — File Header layout per NACHA Operating Rules 2025 §3.1
+  it('File Header (Type 1) positions exact per NACHA OR §3.1', () => {
+    const text = serializeAchNacha(SAMPLE_ACH_TXN);
+    const fileHeader = text.split('\n')[0];
+
+    // Total record length must be 94 chars.
+    expect(fileHeader.length).toBe(94);
+
+    // pos 01 (0-indexed 0): Record Type Code = "1"
+    expect(fileHeader[0]).toBe('1');
+    // pos 02-03 (1-2): Priority Code = "01"
+    expect(fileHeader.substring(1, 3)).toBe('01');
+    // pos 04-13 (3-12): Immediate Destination — 10 chars, blank + 9-digit routing
+    const immDest = fileHeader.substring(3, 13);
+    expect(immDest.length).toBe(10);
+    expect(immDest[0]).toBe(' ');
+    expect(immDest.substring(1)).toMatch(/^\d{9}$/);
+    // pos 14-23 (13-22): Immediate Origin — same shape
+    const immOrigin = fileHeader.substring(13, 23);
+    expect(immOrigin.length).toBe(10);
+    expect(immOrigin[0]).toBe(' ');
+    expect(immOrigin.substring(1)).toMatch(/^\d{9}$/);
+    // pos 24-29 (23-28): File Creation Date YYMMDD
+    expect(fileHeader.substring(23, 29)).toMatch(/^\d{6}$/);
+    // pos 30-33 (29-32): File Creation Time HHMM
+    expect(fileHeader.substring(29, 33)).toMatch(/^\d{4}$/);
+    // pos 34 (33): File ID Modifier (A-Z, 0-9). We hardcode "A".
+    expect(fileHeader[33]).toBe('A');
+    // pos 35-37 (34-36): Record Size = "094"
+    expect(fileHeader.substring(34, 37)).toBe('094');
+    // pos 38-39 (37-38): Blocking Factor = "10"
+    expect(fileHeader.substring(37, 39)).toBe('10');
+    // pos 40 (39): Format Code = "1"
+    expect(fileHeader[39]).toBe('1');
+  });
 });

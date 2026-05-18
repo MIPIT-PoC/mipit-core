@@ -13,9 +13,12 @@
  * This implements the Saga pattern for distributed transactions across payment rails.
  */
 
+import { randomUUID } from 'node:crypto';
+import { ulid } from 'ulid';
 import { PAYMENT_STATUS } from '../config/constants.js';
 import type { PaymentRepository } from '../persistence/repositories/payment.repository.js';
 import type { AuditService } from '../audit/audit-service.js';
+import type { Pacs004Return, ReturnReasonCode } from '../canonical/pacs004.schema.js';
 import { logger } from '../observability/logger.js';
 
 /** Statuses that can be compensated */
@@ -71,16 +74,20 @@ export class CompensationService {
       const wasAcked = payment.rail_ack !== null && payment.rail_ack !== undefined;
 
       if (wasAcked) {
-        log.info('Payment was ACKed by rail — reversal would be required in production');
-        // In production: send reversal/refund to destination rail
-        // For PoC: log the intent
+        // W6.4 — build a proper ISO 20022 pacs.004.001.09 PaymentReturn
+        // message from the original pacs.008 fields persisted on the payment
+        // row. This is the message a corresponsal bank/rail would consume to
+        // honor the reversal. We persist it in the audit trail (the PoC mock
+        // doesn't run a return queue per LIMITATIONS.md §1).
+        log.info('Payment was ACKed by rail — emitting pacs.004 PaymentReturn');
+        const pacs004 = buildPacs004FromPayment(payment, 'TECH');
         await this.auditService.log(
           paymentId,
-          'COMPENSATION_REVERSAL_REQUIRED',
+          'PACS_004_EMITTED',
           'compensation-service',
           {
-            rail_ack: payment.rail_ack,
-            note: 'In production, a pacs.004 (PaymentReturn) message would be sent to the destination rail',
+            pacs004,
+            note: 'Mock destination rail does not consume a return queue (PoC scope-out); pacs.004 is persisted for audit only.',
           },
           payment.trace_id,
         );
@@ -143,3 +150,50 @@ export class CompensationService {
     return { processed: payments.length, succeeded, failed };
   }
 }
+
+/**
+ * W6.4 — Build a pacs.004.001.09 PaymentReturn from a persisted payment row.
+ */
+function buildPacs004FromPayment(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  payment: any,
+  reasonCode: ReturnReasonCode,
+): Pacs004Return {
+  const now = new Date().toISOString();
+  const canonical = (payment.canonical_payload ?? {}) as {
+    grpHdr?: { msgId?: string; creDtTm?: string };
+    pmtId?: { endToEndId?: string; uetr?: string; instrId?: string; txId?: string };
+  };
+  const orgnlMsgId = canonical.grpHdr?.msgId ?? `MSG-${payment.payment_id}`;
+  const orgnlEndToEndId =
+    payment.end_to_end_id ?? canonical.pmtId?.endToEndId ?? payment.payment_id;
+  const orgnlUetr = payment.uetr ?? canonical.pmtId?.uetr;
+  const rtrCcy = payment.settlement_currency ?? payment.currency;
+  const rtrVal = Number(payment.settlement_amount ?? payment.amount);
+
+  return {
+    msgId: `RTR-${randomUUID()}`.slice(0, 35),
+    creDtTm: now,
+    nbOfTxs: 1,
+    ttlRtrdIntrBkSttlmAmt: { value: rtrVal, currency: rtrCcy },
+    sttlmInf: { sttlmMtd: 'CLRG' },
+    orgnlGrpInf: {
+      orgnlMsgId,
+      orgnlMsgNmId: 'pacs.008.001.10',
+      orgnlCreDtTm: canonical.grpHdr?.creDtTm,
+    },
+    txInf: {
+      rtrId: `RTR-${ulid()}`.slice(0, 35),
+      orgnlInstrId: canonical.pmtId?.instrId,
+      orgnlEndToEndId: String(orgnlEndToEndId).slice(0, 35),
+      orgnlTxId: canonical.pmtId?.txId,
+      orgnlUetr,
+      rtrdIntrBkSttlmAmt: { value: rtrVal, currency: rtrCcy },
+      rtrRsnInf: {
+        rsn: { cd: reasonCode, prtry: 'MIPIT-COMPENSATION' },
+        addtlInf: ['Triggered by /compensate endpoint'],
+      },
+    },
+  };
+}
+

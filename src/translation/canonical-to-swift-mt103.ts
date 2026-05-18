@@ -53,7 +53,16 @@ export async function canonicalToSwiftMt103(canonical: CanonicalPacs008): Promis
     },
 
     remittanceInfo: buildRemittanceInfo(canonical),
-    detailsOfCharges: 'SHA',
+    // W6.5 — map canonical ChrgBr (ISO 20022 enum) to MT103 field 71A.
+    // SWIFT MT103 User Handbook field 71A allows BEN/OUR/SHA; SLEV (service
+    // level) has no MT103 equivalent and degrades to SHA per CBPR+ migration
+    // guidance.
+    detailsOfCharges: ({
+      DEBT: 'OUR',
+      CRED: 'BEN',
+      SHAR: 'SHA',
+      SLEV: 'SHA',
+    } as const)[canonical.chrgBr ?? 'SLEV'],
     senderToReceiverInfo: `/MIPIT/${canonical.payment_id}`,
   };
 

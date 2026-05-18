@@ -34,7 +34,9 @@ describe('metrics', () => {
   it('paymentLatency has the specified buckets', async () => {
     recordLatency('TEST', 1);
     const text = await registry.metrics();
-    const expectedBuckets = [5, 10, 25, 50, 100, 250, 500, 1000, 2500];
+    // W5.5 — extended cap from 2500ms to 30000ms so HighLatency alert (>10s)
+    // can fire and p99 doesn't saturate to +Inf. Removed le=5 (under-resolved).
+    const expectedBuckets = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000];
     for (const b of expectedBuckets) {
       expect(text).toContain(`le="${b}"`);
     }

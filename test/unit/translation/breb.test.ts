@@ -146,19 +146,26 @@ describe('canonicalToBreb', () => {
   it('generates a valid idTransaccion (32 chars starting with BR)', async () => {
     const canonical = await makeCanonical();
     const breb = await canonicalToBreb(canonical);
-    expect(breb.idTransaccion).toMatch(/^BR\d{8}\d{8}\d{4}[A-Z0-9]{10}$/);
-    expect(breb.idTransaccion).toHaveLength(32);
+    // W6.7 — idTransaccion is `BR + codigoEntidad(4|8) + YYYYMMDD + HHmm + 10 alnum`.
+    // With the default 4-digit FINTECH_SIMULATED code it's 28 chars; legacy 8-digit
+    // codes produce 32. The mock accepts both forms.
+    expect(breb.idTransaccion).toMatch(/^BR(\d{4}|\d{8})\d{8}\d{4}[A-Z0-9]{10}$/);
+    expect([28, 32]).toContain(breb.idTransaccion.length);
   });
 
-  it('maps amount back with 2 decimal places', async () => {
+  it('emits COP as integer (no centavos, per BanRep TR-002 §5)', async () => {
+    // W5.10/W6.5 — COP is an integer-only currency; we used to .toFixed(2)
+    // which the mock tolerated but a real BanRep sandbox would reject.
     const canonical = await makeCanonical();
     const breb = await canonicalToBreb(canonical);
-    expect(breb.valor.original).toBe('500000.00');
+    expect(breb.valor.original).toBe('500000');
   });
 
   it('sets pagador.codigoEntidad from origin.ispb', async () => {
     const canonical = await makeCanonical();
     const breb = await canonicalToBreb(canonical);
+    // W6.7 — origin.ispb passes through verbatim if provided; otherwise the
+    // 4-digit FINTECH_SIMULATED default is used. This fixture pre-set ispb.
     expect(breb.pagador.codigoEntidad).toBe('26264220');
   });
 
@@ -215,7 +222,10 @@ describe('Bre-B round-trip: BreB → canonical → BreB', () => {
     const canonical = await brebToCanonical(original, PAYMENT_ID);
     const reconstructed = await canonicalToBreb(canonical);
 
-    expect(reconstructed.valor.original).toBe(original.valor.original);
+    // W5.10/W6.5 — COP must round-trip as integer (no centavos). The fixture
+    // sends '500000.00' (legacy form); the outbound side normalizes to '500000'.
+    expect(parseFloat(reconstructed.valor.original)).toBe(parseFloat(original.valor.original));
+    expect(reconstructed.valor.original).not.toContain('.'); // integer form
     expect(reconstructed.llave).toBe(original.llave);
     expect(reconstructed.pagador.codigoEntidad).toBe(original.pagador.codigoEntidad);
     expect(reconstructed.beneficiario.codigoEntidad).toBe(original.beneficiario.codigoEntidad);
@@ -246,31 +256,45 @@ describe('Bre-B round-trip: BreB → canonical → BreB', () => {
 // ─── generateBrebTransactionId ──────────────────────────────────────────────
 
 describe('generateBrebTransactionId', () => {
-  it('has exactly 32 characters', () => {
-    expect(generateBrebTransactionId()).toHaveLength(32);
+  // W6.7 — codigoEntidad is now 4-dig Superfinanciera by default, so the
+  // total length is `BR(2) + entidad(4) + YYYYMMDD(8) + HHmm(4) + 10alnum = 28`.
+  // Legacy 8-digit codes still produce 32 chars; the mock accepts both forms.
+
+  it('has 28 chars with the default 4-digit FINTECH_SIMULATED entity', () => {
+    expect(generateBrebTransactionId()).toHaveLength(28);
   });
 
-  it('starts with BR + 8-digit entity code', () => {
+  it('has 32 chars with a legacy 8-digit entity code', () => {
+    expect(generateBrebTransactionId('00000007')).toHaveLength(32);
+  });
+
+  it('starts with BR + 8-digit entity code (legacy form)', () => {
     const id = generateBrebTransactionId('00000007');
     expect(id.substring(0, 10)).toBe('BR00000007');
   });
 
-  it('positions 10–17 are YYYYMMDD', () => {
-    const id = generateBrebTransactionId();
-    const datePart = id.substring(10, 18);
+  it('starts with BR + 4-digit entity code (modern form)', () => {
+    const id = generateBrebTransactionId('0007');
+    expect(id.substring(0, 6)).toBe('BR0007');
+  });
+
+  it('embeds YYYYMMDD after the entity code', () => {
+    const id = generateBrebTransactionId('0007');
+    // After 'BR' (2) + entity (4) the next 8 chars are YYYYMMDD.
+    const datePart = id.substring(6, 14);
     expect(/^\d{8}$/.test(datePart)).toBe(true);
     expect(parseInt(datePart.substring(0, 4), 10)).toBeGreaterThanOrEqual(2023);
   });
 
-  it('positions 18–21 are HHmm', () => {
-    const id = generateBrebTransactionId();
-    const timePart = id.substring(18, 22);
+  it('embeds HHmm after the date', () => {
+    const id = generateBrebTransactionId('0007');
+    const timePart = id.substring(14, 18);
     expect(/^\d{4}$/.test(timePart)).toBe(true);
   });
 
-  it('positions 22–31 are 10 uppercase alphanumeric chars', () => {
-    const id = generateBrebTransactionId();
-    expect(/^[A-Z0-9]{10}$/.test(id.substring(22))).toBe(true);
+  it('ends with 10 uppercase alphanumeric chars (unique suffix)', () => {
+    const id = generateBrebTransactionId('0007');
+    expect(/^[A-Z0-9]{10}$/.test(id.substring(18))).toBe(true);
   });
 
   it('generates unique IDs', () => {

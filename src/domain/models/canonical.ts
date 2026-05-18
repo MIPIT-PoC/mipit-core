@@ -131,6 +131,35 @@ export const canonicalPacs008Schema = z.object({
    */
   intrBkSttlmDt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 
+  /**
+   * W6.5 — LclInstrm.Prtry: local instrument code. Tells the destination
+   * how to route the payment (RTGS vs instant vs same-day). CBPR+ §4.10
+   * + ISO 20022 ExternalLocalInstrument1Code. Per-rail conventions used by
+   * MIPIT: PIX='PIX', SPEI='SPEI', BRE_B='BREB', FedNow='INST', NACHA='WEB'.
+   * Optional in the schema because translators add the right one for their
+   * outbound rail; the canonical only persists if the inbound translator
+   * captured one.
+   */
+  lclInstrm: z
+    .object({
+      cd: z.string().max(4).optional(),
+      prtry: z.string().max(35).optional(),
+    })
+    .optional(),
+
+  /**
+   * W6.3 — CtgyPurp.Cd: Category Purpose per ISO 20022
+   * `ExternalCategoryPurpose1Code`. Distinguishes semantic intent
+   * (P2P/SALA/CASH/INTC/TAXS/SUPP/...) so destination rails can use the
+   * correct local instruction class. Example mapping:
+   *   PIX.tipo='TRANSF'  → ctgyPurp='CASH'  → SPEI.tipoPago=1 (tercero-a-tercero)
+   *   purpose='SALARY'   → ctgyPurp='SALA'  → SPEI.tipoPago=5 (nómina)
+   *   purpose='TAX'      → ctgyPurp='TAXS'  → SPEI.tipoPago=14 (impuesto federal)
+   * Without this, SPEI mapper hardcoded `tipoPago: 1`, losing semantic info
+   * for the Hacienda audit trail.
+   */
+  ctgyPurp: z.string().max(4).optional(),
+
   amount: z.object({
     value: z.number().positive(),
     currency: z.string().length(3),

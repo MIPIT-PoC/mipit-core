@@ -72,7 +72,20 @@ export async function canonicalToIso20022Mx(canonical: CanonicalPacs008): Promis
       // P01: ChrgBr mandatory in pacs.008.001.10
       ChrgBr: canonical.chrgBr,
 
-      XchgRate: canonical.fx?.rate ? String(canonical.fx.rate) : undefined,
+      // W6.5 — LclInstrm.Prtry for ISO 20022 MX. Defaults to 'SCT' (SEPA-style
+      // Credit Transfer instant) when the canonical didn't carry one upstream.
+      LclInstrm: canonical.lclInstrm
+        ? { Cd: canonical.lclInstrm.cd, Prtry: canonical.lclInstrm.prtry }
+        : { Prtry: 'SCT' },
+
+      // W6.5 — XchgRate as ISO 20022 `ExchangeRate1` object, not a bare string.
+      XchgRate: canonical.fx?.rate
+        ? {
+            UnitCcy: canonical.fx.source_currency,
+            XchgRate: String(canonical.fx.rate),
+            RateTp: 'SPOT' as const,  // PoC uses spot rates; production would carry the negotiated type
+          }
+        : undefined,
 
       DbtrAgt: buildAgent(canonical.origin.bic, canonical.origin.routingNumber),
       Dbtr: buildParty(canonical.debtor),

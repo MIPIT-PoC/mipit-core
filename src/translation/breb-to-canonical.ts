@@ -107,21 +107,34 @@ export interface BreBPaymentResponse {
   descripcionError?: string;
 }
 
-/** BanRep entity codes for major Colombian financial institutions */
+/**
+ * Colombian financial institution codes — 4 digits per Superintendencia
+ * Financiera de Colombia, the catalogue BanRep Bre-B TR-002 §3.1 references.
+ *
+ * W6.7 — unified to the 4-digit catalogue. The previous 8-digit codes
+ * (BANCOLOMBIA `00000007`, etc.) were PoC-invented zero-padded versions
+ * and diverged from the adapter's `SUPERFIN_ENTITY_CODES`. A real BanRep
+ * sandbox would reject the 8-digit form.
+ *
+ * Mirror of `mipit-adapter-breb/src/breb/types.ts:SUPERFIN_ENTITY_CODES`.
+ */
 export const BREB_ENTITY_CODES = {
-  BANCOLOMBIA:       '00000007',
-  BANCO_DE_BOGOTA:   '00000013',
-  DAVIVIENDA:        '00000051',
-  BBVA_COLOMBIA:     '00000013',
-  NEQUI:             '10007550',
-  DAVIPLATA:         '00005141',
-  BANCAMIA:          '00000022',
-  FINTECH_SIMULATED: '26264220', // Simulated entity code for PoC
+  BANCOLOMBIA:       '0007',
+  BANCO_DE_BOGOTA:   '0001',
+  BBVA_COLOMBIA:     '0013',
+  DAVIVIENDA:        '0051',
+  BANCAMIA:          '0059',
+  NEQUI:             '5070',  // SEDPE
+  DAVIPLATA:         '0051',  // operada por Davivienda
+  FINTECH_SIMULATED: '9999',  // out-of-catalogue MIPIT sim code
 } as const;
 
 /**
  * Generates a valid Bre-B idTransaccion.
- * Format: BR + codigoEntidad(8) + YYYYMMDD(8) + HHmm(4) + unique(10) = 32 chars
+ * Format: BR + codigoEntidad(4 or 8) + YYYYMMDD(8) + HHmm(4) + unique(10)
+ *   → 28 chars total when codigoEntidad is 4-digit (W6.7 default)
+ *   → 32 chars total when codigoEntidad is the legacy 8-digit form (kept for
+ *     back-compat). The adapter mock accepts both forms.
  */
 export function generateBrebTransactionId(
   codigoEntidad: string = BREB_ENTITY_CODES.FINTECH_SIMULATED,
@@ -133,11 +146,26 @@ export function generateBrebTransactionId(
   return `BR${codigoEntidad}${date}${time}${unique}`;
 }
 
-/** Infer alias type from the llave value */
+/**
+ * Infer alias type from the llave value — unified with the adapter
+ * (`mipit-adapter-breb/src/breb/mapper.ts:73-81`) per W6.8.
+ *
+ * Rules (TR-002 informed):
+ *   - TELEFONO: `+573xxxxxxxxx` (mobile-only, 10 digits after +57 starting with 3)
+ *   - NIT:      `\d{9,10}-\d` (DIAN format with check digit)
+ *   - ALIAS:    `@<3-19 alnum/._>` — must start with `@` (BanRep convention)
+ *   - EMAIL:    standard RFC pattern with `.` and TLD
+ *   - everything else falls back to ALIAS so the adapter, which is the
+ *     authoritative validator, can re-classify or reject. Previously this
+ *     function classified anything with `@` as EMAIL (catching e.g. `@juan` too),
+ *     and anything else as ALIAS — but a numeric string like `1234567890` was
+ *     ALIAS at the core and CC at the adapter, causing post-translation rejects.
+ */
 function inferTipoLlave(llave: string): BreBKeyType {
-  if (/^\+57\d{10}$/.test(llave)) return 'TELEFONO';
+  if (/^\+573\d{9}$/.test(llave)) return 'TELEFONO';
   if (/^\d{9,10}-\d$/.test(llave)) return 'NIT';
-  if (llave.includes('@')) return 'EMAIL';
+  if (/^@[a-zA-Z0-9._]{3,19}$/.test(llave)) return 'ALIAS';
+  if (/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(llave)) return 'EMAIL';
   return 'ALIAS';
 }
 

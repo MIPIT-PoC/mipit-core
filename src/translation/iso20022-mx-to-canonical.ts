@@ -59,8 +59,21 @@ export interface Iso20022Pacs008 {
     /** P01: Charge Bearer (mandatory in .001.10) */
     ChrgBr?: 'DEBT' | 'CRED' | 'SHAR' | 'SLEV';
 
-    /** Exchange Rate Information */
-    XchgRate?: string;
+    /** W6.5: LclInstrm.Prtry per CBPR+ §4.10 + ExternalLocalInstrument1Code */
+    LclInstrm?: { Cd?: string; Prtry?: string };
+
+    /**
+     * Exchange Rate Information per ISO 20022 `ExchangeRate1`.
+     * W6.5 — was a bare string; now a proper object with rate type so
+     * regulators (Banxico Circular 100/2019, BACEN Circular 3.691) can audit
+     * the FX leg.
+     */
+    XchgRate?: {
+      UnitCcy?: string;
+      XchgRate: string;
+      RateTp?: 'SPOT' | 'SALE' | 'AGRD';
+      CtrctId?: string;
+    } | string;  // string allowed for legacy inbound payloads
 
     /** Debtor Agent */
     DbtrAgt?: {
@@ -171,9 +184,13 @@ export async function iso20022MxToCanonical(
     const cdtrRoutingNum = txn.CdtrAgt?.FinInstnId.ClrSysMmbId?.MmbId;
 
     // FX info
-    const fx = txn.XchgRate
+    // W6.5 — accept both the new object form (preferred) and the legacy string.
+    const rateStr = typeof txn.XchgRate === 'string'
+      ? txn.XchgRate
+      : txn.XchgRate?.XchgRate;
+    const fx = rateStr
       ? {
-          rate: parseFloat(txn.XchgRate),
+          rate: parseFloat(rateStr),
           source_currency: txn.InstdAmt?.Ccy ?? currency,
           local_amount: txn.InstdAmt ? parseFloat(txn.InstdAmt.value) : undefined,
         }

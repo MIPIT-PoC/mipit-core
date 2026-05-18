@@ -96,11 +96,33 @@ export async function canonicalToAchNacha(canonical: CanonicalPacs008): Promise<
 export function serializeAchNacha(txn: AchNachaTransaction): string {
   const lines: string[] = [];
 
-  // File Header (Type 1)
+  // W6.11 — File Header (Type 1) per NACHA Operating Rules 2025 §3.1 (94 chars).
+  //   pos 01     : Record Type "1"
+  //   pos 02-03  : Priority Code "01"
+  //   pos 04-13  : Immediate Destination — 10 chars (blank + 9-digit RDFI routing)
+  //   pos 14-23  : Immediate Origin      — 10 chars (blank + 9-digit ODFI id)
+  //   pos 24-29  : File Creation Date YYMMDD
+  //   pos 30-33  : File Creation Time HHMM
+  //   pos 34     : File ID Modifier
+  //   pos 35-37  : Record Size "094"
+  //   pos 38-39  : Blocking Factor "10"
+  //   pos 40     : Format Code "1"
+  //   pos 41-63  : Immediate Destination Name (23)
+  //   pos 64-86  : Immediate Origin Name (23)
+  //   pos 87-94  : Reference Code (8)
+  // Old code used `'0'.repeat(9).substring(0, 10)` which produced 9 chars (not 10),
+  // shifting every subsequent field by one position and breaking parsing.
   const today = new Date();
   const fileDate = `${today.getFullYear().toString().slice(2)}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
   const fileTime = `${String(today.getHours()).padStart(2, '0')}${String(today.getMinutes()).padStart(2, '0')}`;
-  lines.push(`101 ${txn.odfi.routingNumber.substring(0, 9)} ${'0'.repeat(9).substring(0, 10)}${fileDate}${fileTime}A094101${('MIPIT FI').padEnd(23).substring(0, 23)}${'MIPIT PoC ACH   '.substring(0, 23).padEnd(23)}        1`.substring(0, 94));
+  const rdfiRouting = txn.odfi.routingNumber.padStart(9, '0').slice(0, 9);
+  const immediateDestination = ` ${rdfiRouting}`;          // 10 chars (leading blank + 9 digits)
+  const immediateOrigin = ` ${rdfiRouting}`;                // 10 chars (PoC uses same routing — production fills with ODFI EIN)
+  const immediateDestinationName = 'MIPIT FI'.padEnd(23).slice(0, 23);
+  const immediateOriginName = 'MIPIT PoC ACH'.padEnd(23).slice(0, 23);
+  const referenceCode = '        ';                          // 8 chars blank
+  const fileHeader = `101${immediateDestination}${immediateOrigin}${fileDate}${fileTime}A094101${immediateDestinationName}${immediateOriginName}${referenceCode}`;
+  lines.push(fileHeader.padEnd(94).slice(0, 94));
 
   // Batch Header (Type 5)
   const bh = txn.batchHeader;

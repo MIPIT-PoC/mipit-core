@@ -32,7 +32,11 @@ describe('canonicalToPix', () => {
   it('should produce correct PixOutboundPayload', async () => {
     const result = await canonicalToPix(canonical);
 
-    expect(result.endToEndId).toBe('E2E-001');
+    // W6.9 — non-PIX-formatted endToEndIds are regenerated to the BCB SPI
+    // format `E + ISPB(8) + YYYYMMDDHHmm + 11 alnum` = 32 chars. The input
+    // `E2E-001` does not match, so we expect a freshly generated value.
+    expect(result.endToEndId).toMatch(/^E\d{8}\d{12}[A-Za-z0-9]{11}$/);
+    expect(result.endToEndId).toHaveLength(32);
     expect(result.pixKey).toBe('debtor-123');
     expect(result.amount).toBe(250.0);
     expect(result.currency).toBe('BRL');

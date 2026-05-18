@@ -32,7 +32,11 @@ describe('canonicalToSpei', () => {
   it('should produce correct SpeiOutboundPayload', async () => {
     const result = await canonicalToSpei(canonical);
 
-    expect(result.claveRastreo).toBe('E2E-002');
+    // W6.9 — Banxico SPEI claveRastreo: 1-30 alphanumeric, NO hyphens. The
+    // canonical fixture's endToEndId `E2E-002` contains a hyphen so the
+    // emitter regenerates a compliant value.
+    expect(result.claveRastreo).toMatch(/^[A-Za-z0-9]{1,30}$/);
+    expect(result.claveRastreo).not.toBe('E2E-002');
     expect(result.clabe).toBe('012345678901234567');
     expect(result.monto).toBe(5000.0);
     expect(result.moneda).toBe('MXN');

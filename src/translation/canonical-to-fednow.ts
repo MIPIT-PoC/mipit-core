@@ -1,5 +1,6 @@
 import { ulid } from 'ulid';
 import type { CanonicalPacs008 } from '../domain/models/canonical.js';
+import { TranslationError } from '../domain/errors/index.js';
 import { logger } from '../observability/logger.js';
 import type { FedNowPaymentMessage } from './fednow-to-canonical.js';
 
@@ -27,10 +28,24 @@ export async function canonicalToFednow(canonical: CanonicalPacs008): Promise<Fe
     canonical.debtor.account_id,
   );
 
-  // FedNow only supports USD — convert if needed
-  const amountUsd = canonical.amount.currency === 'USD'
-    ? canonical.amount.value
-    : (canonical.fx?.local_amount ?? canonical.amount.value * (canonical.fx?.rate ?? 1));
+  // W6.10 — FedNow Service Operating Procedures §3.1: FedNow is a domestic-US
+  // service and does NOT support foreign exchange. If the canonical amount is
+  // not USD, the caller is responsible for the on-ramp (e.g. SPEI/SWIFT
+  // corresponsal converting BRL→USD before this translator runs). We accept
+  // an explicit fx.local_amount in USD as evidence of that on-ramp; otherwise
+  // we refuse the translation rather than silently producing an invalid
+  // FedNow payload.
+  let amountUsd: number;
+  if (canonical.amount.currency === 'USD') {
+    amountUsd = canonical.amount.value;
+  } else if (canonical.fx?.local_amount !== undefined && canonical.fx.target_currency === 'USD') {
+    amountUsd = canonical.fx.local_amount;
+  } else {
+    throw new TranslationError(
+      `FedNow is USD-domestic-only (Federal Reserve OP §3.1). Refusing to translate ${canonical.amount.currency} ${canonical.amount.value} without explicit USD on-ramp in canonical.fx.`,
+      'FEDNOW',
+    );
+  }
 
   // Generate UETR (Unique End-to-End Transaction Reference) — UUID v4
   const uetr = generateUetr();

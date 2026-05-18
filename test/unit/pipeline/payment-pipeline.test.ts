@@ -2,6 +2,9 @@ jest.mock('ulid', () => ({ ulid: () => 'MOCK01ULID00000000000' }));
 
 jest.mock('../../../src/observability/metrics.js', () => ({
   startLatencyTimer: jest.fn(() => jest.fn()),
+  // W5.4 — pipeline now also records failures in the counter; mock added to
+  // keep the unit-test isolation (no real prom-client registration).
+  recordPayment: jest.fn(),
 }));
 
 import { PaymentPipeline } from '../../../src/pipeline/payment-pipeline.js';

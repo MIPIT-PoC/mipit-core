@@ -51,8 +51,13 @@ export const pacs002AckSchema = z.object({
 
   /** OrgnlGrpInfAndSts.OrgnlMsgId — original pacs.008 message ID. */
   orgnlMsgId: z.string().max(35),
-  /** OrgnlGrpInfAndSts.OrgnlMsgNmId — ID of the schema of the original message. */
-  orgnlMsgNmId: z.literal('pacs.008.001.10').or(z.literal('pacs.008.001.08')),
+  /**
+   * OrgnlGrpInfAndSts.OrgnlMsgNmId — schema of the original message.
+   * W6.6 — accept any `pacs.008.001.<NN>` (ISO 20022 Maintenance Release
+   * May 2024 publishes .12; CBPR+ migration window 2025-2027 will move from
+   * .10 to .12). Older code locked us to .10/.08.
+   */
+  orgnlMsgNmId: z.string().regex(/^pacs\.008\.001\.\d{2}$/, 'must be pacs.008.001.NN'),
   /** OrgnlGrpInfAndSts.OrgnlCreDtTm — original message creation time. */
   orgnlCreDtTm: z.string().datetime().optional(),
 
