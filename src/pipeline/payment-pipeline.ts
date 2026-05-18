@@ -10,7 +10,7 @@ import type { Publisher } from '../messaging/publisher.js';
 import type { PaymentRepository } from '../persistence/repositories/payment.repository.js';
 import type { AuditService } from '../audit/audit-service.js';
 import type { Logger } from 'pino';
-import { startLatencyTimer } from '../observability/metrics.js';
+import { startLatencyTimer, recordPayment } from '../observability/metrics.js';
 import { broadcastPaymentEvent } from '../api/routes/sse.js';
 import type { RateLimiter } from '../resilience/rate-limiter.js';
 
@@ -290,6 +290,11 @@ export class PaymentPipeline {
         log.error({ err: auditErr }, 'Failed to record pipeline error in audit/DB');
       }
 
+      // W5.4 — count pipeline failures in mipit_payments_total so Grafana
+      // matches DB. Previously only the ACK consumer recorded the counter,
+      // hiding failures that crashed before routing.
+      recordPayment(PAYMENT_STATUS.FAILED, originRail, 'UNKNOWN');
+
       log.error({ err }, 'Pipeline failed');
       throw err;
     }
@@ -322,8 +327,10 @@ export class PaymentPipeline {
     // SPEI: CLABE (18 digits with check digit)
     if (/^\d{18}$/.test(alias)) return 'SPEI';
 
-    // BRE_B: Colombian phone +57
-    if (/^\+57\d{10}$/.test(alias)) return 'BRE_B';
+    // BRE_B: Colombian mobile +57 followed by `3` prefix (BanRep TR-002 — mobile-only).
+    // W5.11 — was `^\+57\d{10}$` which also matched landlines; the mock rejected
+    // those but the core inferred BRE_B and routed there. Now infer-equal to mock.
+    if (/^\+573\d{9}$/.test(alias)) return 'BRE_B';
     // BRE_B: NIT (Colombian tax ID, 9-10 digits optionally with dash+check)
     if (/^\d{9,10}(-\d)?$/.test(alias)) return 'BRE_B';
 

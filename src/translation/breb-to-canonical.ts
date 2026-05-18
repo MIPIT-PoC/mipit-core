@@ -5,17 +5,28 @@ import { logger } from '../observability/logger.js';
 
 /**
  * Bre-B (Banco de la República — Colombia) Payment Message
- * Instant payment system operated by Banco de la República (BanRep).
- * Launched: 2023 as the Colombian national instant payment infrastructure.
  *
- * Key identifiers:
- *   - codigoEntidad: 8-digit BanRep entity code (analogous to BACEN ISPB)
- *   - llave: alias — phone (+57...), NIT, email, or alias string
+ * !!! IMPORTANT — MOCK FIDELITY DISCLOSURE (W5.13) !!!
+ * BanRep had not published a public wire-format specification at the time
+ * this module was written. The field names, error codes (BREB001–005), the
+ * REST endpoint layout, and the 8-digit codigoEntidad below are EDUCATED
+ * GUESSES based on TR-002 high-level docs and Superfinanciera conventions —
+ * they are NOT BanRep-verified. See `mipit-docs/LIMITATIONS.md` §1.
+ *
+ * Real BanRep TR-002 v1.1 (Oct 2025) actually uses 4-digit Superfinanciera
+ * codes (see `mipit-adapter-breb/src/breb/types.ts:105-122` for the official
+ * catalogue) and references ISO 20022 ExternalStatusReason1Code values, not
+ * the proprietary BREB001-005 we invented for this PoC.
+ *
+ * Key identifiers (PoC convention):
+ *   - codigoEntidad: 8-digit code (LEGACY — replaced by 4-digit in adapter)
+ *   - llave: alias — phone (+573…), NIT, email, or `@alias` string
  *   - tipoLlave: TELEFONO | NIT | EMAIL | ALIAS
  *   - idTransaccion: BR + entity(8) + YYYYMMDD(8) + HHmm(4) + unique(10) = 32 chars
- *   - Currency: always COP (Colombian Peso)
+ *   - Currency: always COP (Colombian Peso, integer — no centavos)
  *
- * Error codes (BanRep spec):
+ * Error codes (MIPIT-invented, NOT BanRep-published — pending mapping to
+ * ISO 20022 ExternalStatusReason1Code; see audits/AUDITORIA-2-2026-05-17.md R-010):
  *   BREB001 — Fondos insuficientes
  *   BREB002 — Cuenta/entidad no encontrada
  *   BREB003 — Límite de transacción excedido
